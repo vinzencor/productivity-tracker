@@ -82,7 +82,17 @@ export function EmployeePage({ selectedEmployeeId, onSelectEmployee }: EmployeeP
   }
 
   if (!employee) {
-    return <div className="p-6 text-center text-stone-700 dark:text-stone-200">No employee found.</div>
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#FFFDF5] px-6 text-center text-stone-700 dark:bg-[#121214] dark:text-stone-200">
+        <div className="max-w-md rounded-2xl border border-yellow-200 bg-white p-6 shadow-sm dark:border-yellow-800 dark:bg-stone-900">
+          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-yellow-700 dark:text-yellow-300">No employee</p>
+          <h2 className="mt-3 text-2xl font-black text-stone-900 dark:text-white">No employee found.</h2>
+          <p className="mt-2 text-sm text-stone-600 dark:text-stone-300">
+            The employee list is still loading or no employees have been added yet. Please ask HR to create an employee profile first.
+          </p>
+        </div>
+      </div>
+    )
   }
 
   return (

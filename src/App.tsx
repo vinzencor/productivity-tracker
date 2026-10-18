@@ -33,7 +33,7 @@ function App() {
 
       if (!user) {
         setAdminLoggedIn(false)
-        stopRealtimeSync()
+        startRealtimeSync()
         return
       }
 
@@ -46,17 +46,11 @@ function App() {
         }
 
         setAdminLoggedIn(isAdmin)
-
-        if (isAdmin) {
-          startRealtimeSync()
-          return
-        }
-
-        stopRealtimeSync()
+        startRealtimeSync()
       } catch (error) {
         console.error('Failed to check admin authorization:', error)
         setAdminLoggedIn(false)
-        stopRealtimeSync()
+        startRealtimeSync()
       }
     })
 
