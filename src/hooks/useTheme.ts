@@ -1,26 +1,33 @@
-import { useEffect, useState } from 'react'
+import { create } from 'zustand'
 
 export type ThemeMode = 'light' | 'dark'
 
 const THEME_KEY = 'productivity-quest-theme'
 
-export function useTheme() {
-  const [theme, setTheme] = useState<ThemeMode>(() => {
-    const saved = localStorage.getItem(THEME_KEY)
-    if (saved === 'dark' || saved === 'light') {
-      return saved
-    }
+// index.html applies the saved theme class before React mounts, so the DOM is the source of truth here.
+function readInitialTheme(): ThemeMode {
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+}
 
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-  })
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark')
+function applyTheme(theme: ThemeMode) {
+  document.documentElement.classList.toggle('dark', theme === 'dark')
+  try {
     localStorage.setItem(THEME_KEY, theme)
-  }, [theme])
-
-  return {
-    theme,
-    toggleTheme: () => setTheme((current) => (current === 'dark' ? 'light' : 'dark')),
+  } catch {
+    // Storage can be unavailable (private mode); the theme still applies for this session.
   }
 }
+
+type ThemeState = {
+  theme: ThemeMode
+  toggleTheme: () => void
+}
+
+export const useTheme = create<ThemeState>()((set, get) => ({
+  theme: readInitialTheme(),
+  toggleTheme: () => {
+    const next = get().theme === 'dark' ? 'light' : 'dark'
+    applyTheme(next)
+    set({ theme: next })
+  },
+}))

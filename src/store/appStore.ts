@@ -1,5 +1,5 @@
 import { format } from 'date-fns'
-import { collection, deleteDoc, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore'
+import { collection, deleteDoc, deleteField, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore'
 import { create } from 'zustand'
 
 import { db } from '../firebase'
@@ -13,20 +13,55 @@ const EMPTY_DATA: DemoData = {
   tasks: [],
 }
 
+const EMPLOYEE_KEY = 'productivity-quest-employee'
+
+function readStoredEmployeeId() {
+  try {
+    return localStorage.getItem(EMPLOYEE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function storeEmployeeId(employeeId: string | null) {
+  try {
+    if (employeeId) {
+      localStorage.setItem(EMPLOYEE_KEY, employeeId)
+    } else {
+      localStorage.removeItem(EMPLOYEE_KEY)
+    }
+  } catch {
+    // Storage can be unavailable (private mode); selection still works for this session.
+  }
+}
+
+// Firestore rejects `undefined` values, so clear those fields explicitly instead.
+function toFirestoreUpdate(data: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(data)
+      .filter(([key]) => key !== 'id')
+      .map(([key, value]) => [key, value === undefined ? deleteField() : value]),
+  )
+}
+
+export type AuthStatus = 'loading' | 'ready'
+
 type AppState = DemoData & {
+  loaded: boolean
   selectedEmployeeId: string | null
+  authStatus: AuthStatus
   adminLoggedIn: boolean
+  adminEmail: string | null
   firebaseUnsubscribe: (() => void) | undefined
   setSelectedEmployeeId: (employeeId: string | null) => void
-  setAdminLoggedIn: (value: boolean) => void
+  setAuthState: (auth: { isAdmin: boolean; email: string | null }) => void
   startRealtimeSync: () => (() => void) | undefined
   stopRealtimeSync: () => void
-  clearData: () => void
   addTeam: (name: string) => Promise<Team>
   addEmployee: (employee: Omit<Employee, 'id' | 'totalPoints' | 'createdAt'>) => Promise<Employee>
   addWorkType: (workType: Omit<WorkType, 'id' | 'createdAt'>) => Promise<WorkType>
   addTask: (task: Omit<Task, 'id' | 'createdAt'>) => Promise<Task>
-  completeTask: (taskId: string) => Promise<void>
+  completeTask: (taskId: string) => Promise<number | undefined>
   revertTask: (taskId: string) => Promise<void>
   deleteTask: (taskId: string) => Promise<void>
   deleteTeam: (teamId: string) => Promise<void>
@@ -76,43 +111,75 @@ const mapTask = (data: Record<string, unknown> & { id?: string }): Task => ({
   createdBy: (data.createdBy as Task['createdBy']) ?? 'hr',
 })
 
+const byName = <T extends { name: string }>(left: T, right: T) => left.name.localeCompare(right.name)
+
 export const useAppStore = create<AppState>()((set, get) => ({
   ...EMPTY_DATA,
-  selectedEmployeeId: null,
+  loaded: false,
+  selectedEmployeeId: readStoredEmployeeId(),
+  authStatus: 'loading',
   adminLoggedIn: false,
+  adminEmail: null,
   firebaseUnsubscribe: undefined,
-  setSelectedEmployeeId: (employeeId) => set({ selectedEmployeeId: employeeId }),
-  setAdminLoggedIn: (value) => set({ adminLoggedIn: value }),
+  setSelectedEmployeeId: (employeeId) => {
+    storeEmployeeId(employeeId)
+    set({ selectedEmployeeId: employeeId })
+  },
+  setAuthState: ({ isAdmin, email }) => set({ authStatus: 'ready', adminLoggedIn: isAdmin, adminEmail: email }),
   startRealtimeSync: () => {
     const currentStop = get().firebaseUnsubscribe
     if (currentStop) {
       currentStop()
     }
 
+    const pending = new Set(['teams', 'employees', 'workTypes', 'tasks'])
+    const markLoaded = (key: string) => {
+      pending.delete(key)
+      if (pending.size === 0 && !get().loaded) {
+        set({ loaded: true })
+      }
+    }
+    const onError = (key: string) => (error: Error) => {
+      console.error(`Failed to sync ${key}:`, error)
+      markLoaded(key)
+    }
+
     const unsubscribers = [
-      onSnapshot(collection(db, 'teams'), (snapshot) => {
-        set({
-          teams: snapshot.docs.map((docSnap) => mapTeam({ id: docSnap.id, ...docSnap.data() })),
-        })
-      }),
-      onSnapshot(collection(db, 'employees'), (snapshot) => {
-        const employees = snapshot.docs.map((docSnap) => mapEmployee({ id: docSnap.id, ...docSnap.data() }))
-        set({ employees })
-        const selected = get().selectedEmployeeId
-        if (!selected && employees[0]) {
-          set({ selectedEmployeeId: employees[0].id })
-        }
-      }),
-      onSnapshot(collection(db, 'workTypes'), (snapshot) => {
-        set({
-          workTypes: snapshot.docs.map((docSnap) => mapWorkType({ id: docSnap.id, ...docSnap.data() })),
-        })
-      }),
-      onSnapshot(collection(db, 'tasks'), (snapshot) => {
-        set({
-          tasks: snapshot.docs.map((docSnap) => mapTask({ id: docSnap.id, ...docSnap.data() })),
-        })
-      }),
+      onSnapshot(
+        collection(db, 'teams'),
+        (snapshot) => {
+          set({ teams: snapshot.docs.map((docSnap) => mapTeam({ id: docSnap.id, ...docSnap.data() })).sort(byName) })
+          markLoaded('teams')
+        },
+        onError('teams'),
+      ),
+      onSnapshot(
+        collection(db, 'employees'),
+        (snapshot) => {
+          const employees = snapshot.docs.map((docSnap) => mapEmployee({ id: docSnap.id, ...docSnap.data() })).sort(byName)
+          const selected = get().selectedEmployeeId
+          const selectionValid = employees.some((employee) => employee.id === selected)
+          set({ employees, selectedEmployeeId: selectionValid ? selected : employees[0]?.id ?? null })
+          markLoaded('employees')
+        },
+        onError('employees'),
+      ),
+      onSnapshot(
+        collection(db, 'workTypes'),
+        (snapshot) => {
+          set({ workTypes: snapshot.docs.map((docSnap) => mapWorkType({ id: docSnap.id, ...docSnap.data() })).sort(byName) })
+          markLoaded('workTypes')
+        },
+        onError('workTypes'),
+      ),
+      onSnapshot(
+        collection(db, 'tasks'),
+        (snapshot) => {
+          set({ tasks: snapshot.docs.map((docSnap) => mapTask({ id: docSnap.id, ...docSnap.data() })) })
+          markLoaded('tasks')
+        },
+        onError('tasks'),
+      ),
     ]
 
     const stop = () => unsubscribers.forEach((unsubscribe) => unsubscribe())
@@ -125,13 +192,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
       stop()
     }
     set({ firebaseUnsubscribe: undefined })
-  },
-  clearData: () => {
-    set({
-      ...EMPTY_DATA,
-      selectedEmployeeId: null,
-      adminLoggedIn: false,
-    })
   },
   addTeam: async (name) => {
     const newTeam: Team = {
@@ -173,32 +233,32 @@ export const useAppStore = create<AppState>()((set, get) => ({
   completeTask: async (taskId) => {
     const task = get().tasks.find((item) => item.id === taskId)
     if (!task || task.status === 'completed') {
-      return
+      return undefined
     }
 
     const workType = get().workTypes.find((item) => item.id === task.workTypeId)
-    const points = workType ? getTaskPointsForTeam(workType, task.teamId, task.points || 0) : task.points || 0
-    const updatedTask: Task = {
-      ...task,
-      status: 'completed',
+    // Older reverted tasks were stored with 0 points; fall back to the work type's value for those.
+    const points = workType ? getTaskPointsForTeam(workType, task.teamId, task.points || undefined) : task.points || 0
+    const completion = {
+      status: 'completed' as const,
       points,
       completedAt: new Date().toISOString(),
       completedDate: format(new Date(), 'yyyy-MM-dd'),
     }
-    await updateDoc(doc(db, 'tasks', taskId), updatedTask)
+    await updateDoc(doc(db, 'tasks', taskId), completion)
 
     const employee = get().employees.find((person) => person.id === task.employeeId)
     if (employee) {
-      const nextPoints = employee.totalPoints + points
-      await updateDoc(doc(db, 'employees', employee.id), { totalPoints: nextPoints })
+      await updateDoc(doc(db, 'employees', employee.id), { totalPoints: employee.totalPoints + points })
     }
 
     set((state) => ({
-      tasks: state.tasks.map((item) => (item.id === taskId ? updatedTask : item)),
+      tasks: state.tasks.map((item) => (item.id === taskId ? { ...item, ...completion } : item)),
       employees: state.employees.map((person) =>
         person.id === employee?.id ? { ...person, totalPoints: employee.totalPoints + points } : person,
       ),
     }))
+    return points
   },
   revertTask: async (taskId) => {
     const task = get().tasks.find((item) => item.id === taskId)
@@ -206,34 +266,27 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return
     }
 
-    const updatedTask: Task = {
-      ...task,
+    // Points stay on the task so completing it again awards the same amount.
+    await updateDoc(doc(db, 'tasks', taskId), {
       status: 'pending',
-      points: 0,
-      completedAt: undefined,
-      completedDate: undefined,
-    }
+      completedAt: deleteField(),
+      completedDate: deleteField(),
+    })
 
-    await updateDoc(doc(db, 'tasks', taskId), updatedTask)
     const employee = get().employees.find((person) => person.id === task.employeeId)
+    const nextPoints = employee ? Math.max(employee.totalPoints - task.points, 0) : 0
     if (employee) {
-      const nextPoints = Math.max(employee.totalPoints - task.points, 0)
       await updateDoc(doc(db, 'employees', employee.id), { totalPoints: nextPoints })
     }
 
     set((state) => ({
-      tasks: state.tasks.map((item) => (item.id === taskId ? updatedTask : item)),
-      employees: state.employees.map((person) =>
-        person.id === employee?.id ? { ...person, totalPoints: employee ? Math.max(employee.totalPoints - task.points, 0) : person.totalPoints } : person,
+      tasks: state.tasks.map((item) =>
+        item.id === taskId ? { ...item, status: 'pending', completedAt: undefined, completedDate: undefined } : item,
       ),
+      employees: state.employees.map((person) => (person.id === employee?.id ? { ...person, totalPoints: nextPoints } : person)),
     }))
   },
   deleteTask: async (taskId) => {
-    const task = get().tasks.find((item) => item.id === taskId)
-    if (!task) {
-      return
-    }
-
     await deleteDoc(doc(db, 'tasks', taskId))
     set((state) => ({
       tasks: state.tasks.filter((item) => item.id !== taskId),
@@ -243,26 +296,24 @@ export const useAppStore = create<AppState>()((set, get) => ({
     await deleteDoc(doc(db, 'teams', teamId))
     set((state) => ({
       teams: state.teams.filter((team) => team.id !== teamId),
-      employees: state.employees.map((employee) =>
-        employee.teamId === teamId ? { ...employee, teamId: state.teams[0]?.id ?? employee.teamId } : employee,
-      ),
     }))
   },
   deleteEmployee: async (employeeId) => {
     await deleteDoc(doc(db, 'employees', employeeId))
     await Promise.all(get().tasks.filter((task) => task.employeeId === employeeId).map((task) => deleteDoc(doc(db, 'tasks', task.id))))
-    set((state) => ({
-      employees: state.employees.filter((employee) => employee.id !== employeeId),
-      tasks: state.tasks.filter((task) => task.employeeId !== employeeId),
-      selectedEmployeeId:
-        state.selectedEmployeeId === employeeId ? state.employees[0]?.id ?? null : state.selectedEmployeeId,
-    }))
+    set((state) => {
+      const employees = state.employees.filter((employee) => employee.id !== employeeId)
+      return {
+        employees,
+        tasks: state.tasks.filter((task) => task.employeeId !== employeeId),
+        selectedEmployeeId: state.selectedEmployeeId === employeeId ? employees[0]?.id ?? null : state.selectedEmployeeId,
+      }
+    })
   },
   deleteWorkType: async (workTypeId) => {
     await deleteDoc(doc(db, 'workTypes', workTypeId))
     set((state) => ({
       workTypes: state.workTypes.filter((workType) => workType.id !== workTypeId),
-      tasks: state.tasks.filter((task) => task.workTypeId !== workTypeId),
     }))
   },
   updateTask: async (taskId, updates) => {
@@ -270,10 +321,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!task) {
       return
     }
-    const nextTask = { ...task, ...updates }
-    await updateDoc(doc(db, 'tasks', taskId), nextTask)
+    await updateDoc(doc(db, 'tasks', taskId), toFirestoreUpdate(updates))
     set((state) => ({
-      tasks: state.tasks.map((item) => (item.id === taskId ? nextTask : item)),
+      tasks: state.tasks.map((item) => (item.id === taskId ? { ...item, ...updates } : item)),
     }))
   },
 }))
