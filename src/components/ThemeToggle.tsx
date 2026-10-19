@@ -1,20 +1,14 @@
 import { Moon, Sun } from 'lucide-react'
 
-type ThemeToggleProps = {
-  theme: 'light' | 'dark'
-  onToggle: () => void
-}
+import { useTheme } from '../hooks/useTheme'
 
-export function ThemeToggle({ theme, onToggle }: ThemeToggleProps) {
+export function ThemeToggle({ className = 'btn btn-secondary btn-icon' }: { className?: string }) {
+  const { theme, toggleTheme } = useTheme()
+  const label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
+
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className="inline-flex items-center gap-2 rounded-full border border-yellow-300 bg-white/80 px-4 py-2 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-yellow-50 dark:border-yellow-700 dark:bg-stone-900/80 dark:text-yellow-50"
-      aria-label="Toggle theme"
-    >
+    <button type="button" onClick={toggleTheme} className={className} aria-label={label} title={label}>
       {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-      {theme === 'dark' ? 'Light' : 'Dark'}
     </button>
   )
 }

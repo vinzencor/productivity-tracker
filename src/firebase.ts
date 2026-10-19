@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app'
-import { browserLocalPersistence, getAuth, setPersistence } from 'firebase/auth'
+import { getAuth } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 
 const defaultConfig = {
@@ -26,17 +26,6 @@ const firebaseConfig = {
 }
 
 export const app = initializeApp(firebaseConfig)
+// getAuth() in the browser already persists the session locally (IndexedDB), so it survives refreshes.
 export const auth = getAuth(app)
 export const db = getFirestore(app)
-
-export const initializeAuthPersistence = async () => {
-  await setPersistence(auth, browserLocalPersistence)
-}
-
-void initializeAuthPersistence()
-
-export const hasFirebaseConfig = Boolean(
-  import.meta.env.VITE_FIREBASE_API_KEY &&
-    import.meta.env.VITE_FIREBASE_PROJECT_ID &&
-    import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-)

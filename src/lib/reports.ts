@@ -1,4 +1,4 @@
-import type { Employee, Task, Team, WorkType } from '../types'
+import type { Task } from '../types'
 
 export type DatePreset = 'today' | 'yesterday' | 'this-week' | 'this-month' | 'custom'
 
@@ -40,61 +40,6 @@ export function getRangeForPreset(preset: DatePreset) {
   return { start, end }
 }
 
-export function aggregateByEmployee(tasks: Task[], employees: Employee[]) {
-  return employees.map((employee) => {
-    const points = tasks
-      .filter(
-        (task) => task.employeeId === employee.id && task.status === 'completed',
-      )
-      .reduce((sum, task) => sum + task.points, 0)
-
-    return {
-      employeeId: employee.id,
-      employeeName: employee.name,
-      teamId: employee.teamId,
-      points,
-    }
-  })
-}
-
-export function aggregateByType(tasks: Task[], workTypes: WorkType[]) {
-  const totals = new Map<string, { name: string; points: number }>()
-
-  tasks
-    .filter((task) => task.status === 'completed')
-    .forEach((task) => {
-      const entry = totals.get(task.workTypeId) ?? {
-        name: task.workTypeName,
-        points: 0,
-      }
-
-      entry.points += task.points
-      totals.set(task.workTypeId, entry)
-    })
-
-  return workTypes
-    .filter((workType) => totals.has(workType.id))
-    .map((workType) => ({
-      name: workType.name,
-      points: totals.get(workType.id)?.points ?? 0,
-    }))
-}
-
-export function aggregateByTeam(tasks: Task[], teams: Team[]) {
-  const totals = new Map<string, number>()
-
-  tasks
-    .filter((task) => task.status === 'completed')
-    .forEach((task) => {
-      totals.set(task.teamId, (totals.get(task.teamId) ?? 0) + task.points)
-    })
-
-  return teams.map((team) => ({
-    name: team.name,
-    points: totals.get(team.id) ?? 0,
-  }))
-}
-
 export function filterTasksByPeriod(tasks: Task[], period: DatePreset, customStart?: string, customEnd?: string) {
   return tasks.filter((task) => {
     if (task.status !== 'completed') {
@@ -134,5 +79,6 @@ export function downloadCsv(rows: string[][], filename: string) {
   link.href = url
   link.download = filename
   link.click()
-  URL.revokeObjectURL(url)
+  // Revoking synchronously can cancel the download in Safari/Firefox.
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
