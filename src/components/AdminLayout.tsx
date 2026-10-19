@@ -7,6 +7,7 @@ import { auth } from '../firebase'
 import { useAppStore } from '../store/appStore'
 import { BrandMark } from './BrandMark'
 import { ThemeToggle } from './ThemeToggle'
+import { TulipButton } from './tulip/TulipButton'
 
 const navItems = [
   { to: '/hr', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -95,10 +96,13 @@ export function AdminLayout() {
       </header>
 
       <main className="lg:pl-64">
-        <div className="mx-auto w-full max-w-7xl px-4 pb-28 pt-6 sm:px-6 lg:px-8 lg:pb-10 lg:pt-8">
+        {/* Bottom padding leaves room for the mobile nav and the floating tulip button. */}
+        <div className="mx-auto w-full max-w-7xl px-4 pb-40 pt-6 sm:px-6 lg:px-8 lg:pb-24 lg:pt-8">
           <Outlet />
         </div>
       </main>
+
+      <TulipButton />
 
       {/* Mobile bottom navigation */}
       <nav
