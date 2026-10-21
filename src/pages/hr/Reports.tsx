@@ -7,8 +7,9 @@ import { EmptyState } from '../../components/EmptyState'
 import { SectionLoader } from '../../components/Loader'
 import { PageHeader } from '../../components/PageHeader'
 import { StatCard } from '../../components/StatCard'
+import { completionLabel, completionsOf, sumCompletionPoints } from '../../lib/completions'
 import { formatDay, todayKey } from '../../lib/dates'
-import { downloadCsv, filterTasksByPeriod, getRangeForPreset, type DatePreset } from '../../lib/reports'
+import { downloadCsv, filterCompletionsByPeriod, getRangeForPreset, type DatePreset } from '../../lib/reports'
 import { useAppStore } from '../../store/appStore'
 
 const PERIOD_LABELS: Record<DatePreset, string> = {
@@ -64,24 +65,25 @@ export function ReportsPage() {
   const [customStart, setCustomStart] = useState(() => todayKey())
   const [customEnd, setCustomEnd] = useState(() => todayKey())
 
-  const filteredTasks = useMemo(() => {
+  // One entry per "Mark as done", so a task with count 3 can spread its points over several days.
+  const completed = useMemo(() => {
     const employeeId = selectedEmployee === 'all' ? null : selectedEmployee
-    return filterTasksByPeriod(tasks, period, customStart, customEnd)
-      .filter((task) => !employeeId || task.employeeId === employeeId)
-      .sort((left, right) => (right.completedAt ?? right.completedDate ?? '').localeCompare(left.completedAt ?? left.completedDate ?? ''))
+    return filterCompletionsByPeriod(completionsOf(tasks), period, customStart, customEnd)
+      .filter((item) => !employeeId || item.task.employeeId === employeeId)
+      .sort((left, right) => right.at.localeCompare(left.at))
   }, [customEnd, customStart, period, selectedEmployee, tasks])
 
   const employeeName = (id: string) => employees.find((person) => person.id === id)?.name ?? 'Unknown'
   const teamName = (id: string) => teams.find((team) => team.id === id)?.name ?? 'No team'
 
-  const totalPoints = filteredTasks.reduce((sum, task) => sum + task.points, 0)
+  const totalPoints = sumCompletionPoints(completed)
 
   const topPerformer = useMemo(() => {
     const totals = new Map<string, number>()
-    filteredTasks.forEach((task) => totals.set(task.employeeId, (totals.get(task.employeeId) ?? 0) + task.points))
+    completed.forEach(({ task }) => totals.set(task.employeeId, (totals.get(task.employeeId) ?? 0) + task.points))
     const [best] = [...totals.entries()].sort((left, right) => right[1] - left[1])
     return best ? { name: employees.find((person) => person.id === best[0])?.name ?? 'Unknown', points: best[1] } : null
-  }, [employees, filteredTasks])
+  }, [employees, completed])
 
   const teamTotals = useMemo(
     () =>
@@ -89,10 +91,10 @@ export function ReportsPage() {
         .map((team) => ({
           id: team.id,
           name: team.name,
-          value: filteredTasks.filter((task) => task.teamId === team.id).reduce((sum, task) => sum + task.points, 0),
+          value: sumCompletionPoints(completed.filter(({ task }) => task.teamId === team.id)),
         }))
         .sort((left, right) => right.value - left.value),
-    [filteredTasks, teams],
+    [completed, teams],
   )
 
   const workTotals = useMemo(
@@ -102,11 +104,11 @@ export function ReportsPage() {
           id: workType.id,
           name: workType.name,
           icon: workType.icon,
-          value: filteredTasks.filter((task) => task.workTypeId === workType.id).reduce((sum, task) => sum + task.points, 0),
+          value: sumCompletionPoints(completed.filter(({ task }) => task.workTypeId === workType.id)),
         }))
         .filter((item) => item.value > 0)
         .sort((left, right) => right.value - left.value),
-    [filteredTasks, workTypes],
+    [completed, workTypes],
   )
 
   const rangeLabel = useMemo(() => {
@@ -125,13 +127,13 @@ export function ReportsPage() {
     downloadCsv(
       [
         ['Employee', 'Team', 'Task', 'Work type', 'Points', 'Completed on'],
-        ...filteredTasks.map((task) => [
-          employeeName(task.employeeId),
-          teamName(task.teamId),
-          task.title,
-          task.workTypeName,
-          String(task.points),
-          task.completedDate ?? '',
+        ...completed.map((item) => [
+          employeeName(item.task.employeeId),
+          teamName(item.task.teamId),
+          completionLabel(item),
+          item.task.workTypeName,
+          String(item.task.points),
+          item.day,
         ]),
       ],
       'productivity-report.csv',
@@ -148,12 +150,13 @@ export function ReportsPage() {
     pdf.setFontSize(10)
     pdf.setTextColor(100)
     pdf.text(`${employeeLabel} · ${PERIOD_LABELS[period]} (${rangeLabel})`, 14, 26)
-    pdf.text(`${filteredTasks.length} completed tasks · ${totalPoints} points`, 14, 32)
+    pdf.text(`${completed.length} completed · ${totalPoints} points`, 14, 32)
     pdf.setTextColor(0)
 
     let y = 44
-    filteredTasks.forEach((task) => {
-      const line = `${task.completedDate ?? '-'}  ·  ${employeeName(task.employeeId)} (${teamName(task.teamId)})  ·  ${task.title || task.workTypeName} [${task.workTypeName}]  ·  ${task.points} pts`
+    completed.forEach((item) => {
+      const { task } = item
+      const line = `${item.day}  ·  ${employeeName(task.employeeId)} (${teamName(task.teamId)})  ·  ${completionLabel(item)} [${task.workTypeName}]  ·  ${task.points} pts`
       const wrapped = pdf.splitTextToSize(line, pageWidth - 28) as string[]
       if (y + wrapped.length * 6 > 280) {
         pdf.addPage()
@@ -166,7 +169,7 @@ export function ReportsPage() {
     pdf.save('productivity-report.pdf')
   }
 
-  const noData = filteredTasks.length === 0
+  const noData = completed.length === 0
 
   return (
     <div className="space-y-6">
@@ -256,7 +259,7 @@ export function ReportsPage() {
       ) : (
         <>
           <section className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
-            <StatCard label="Completed" value={filteredTasks.length} icon={CircleCheck} hint={rangeLabel} />
+            <StatCard label="Completed" value={completed.length} icon={CircleCheck} hint={rangeLabel} />
             <StatCard label="Points earned" value={totalPoints} icon={Zap} hint={employeeLabel} />
             <div className="col-span-2 lg:col-span-1">
               <StatCard
@@ -277,7 +280,7 @@ export function ReportsPage() {
             </Card>
           </section>
 
-          <Card title="Completed tasks" description={`${filteredTasks.length} in ${rangeLabel}`} icon={ListChecks} bodyClassName="p-0">
+          <Card title="Completed tasks" description={`${completed.length} in ${rangeLabel}`} icon={ListChecks} bodyClassName="p-0">
             {noData ? (
               <div className="p-4 sm:p-5">
                 <EmptyState icon={ListChecks} title="Nothing to show" description="No tasks were completed for this filter." />
@@ -297,16 +300,16 @@ export function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
-                      {filteredTasks.map((task) => (
-                        <tr key={task.id} className="transition-colors hover:bg-stone-50 dark:hover:bg-stone-800/40">
-                          <td className="whitespace-nowrap px-5 py-3 font-medium text-stone-900 dark:text-white">{employeeName(task.employeeId)}</td>
-                          <td className="whitespace-nowrap px-5 py-3 text-stone-600 dark:text-stone-300">{teamName(task.teamId)}</td>
+                      {completed.map((item) => (
+                        <tr key={`${item.task.id}-${item.unit}`} className="transition-colors hover:bg-stone-50 dark:hover:bg-stone-800/40">
+                          <td className="whitespace-nowrap px-5 py-3 font-medium text-stone-900 dark:text-white">{employeeName(item.task.employeeId)}</td>
+                          <td className="whitespace-nowrap px-5 py-3 text-stone-600 dark:text-stone-300">{teamName(item.task.teamId)}</td>
                           <td className="px-5 py-3">
-                            <p className="font-medium text-stone-900 dark:text-white">{task.title || task.workTypeName}</p>
-                            <p className="text-xs text-stone-500 dark:text-stone-400">{task.workTypeName}</p>
+                            <p className="font-medium text-stone-900 dark:text-white">{completionLabel(item)}</p>
+                            <p className="text-xs text-stone-500 dark:text-stone-400">{item.task.workTypeName}</p>
                           </td>
-                          <td className="whitespace-nowrap px-5 py-3 text-right font-semibold tabular-nums text-stone-900 dark:text-white">{task.points}</td>
-                          <td className="whitespace-nowrap px-5 py-3 text-right tabular-nums text-stone-600 dark:text-stone-300">{formatDay(task.completedDate)}</td>
+                          <td className="whitespace-nowrap px-5 py-3 text-right font-semibold tabular-nums text-stone-900 dark:text-white">{item.task.points}</td>
+                          <td className="whitespace-nowrap px-5 py-3 text-right tabular-nums text-stone-600 dark:text-stone-300">{formatDay(item.day)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -315,18 +318,18 @@ export function ReportsPage() {
 
                 {/* Mobile list */}
                 <ul className="divide-y divide-stone-100 md:hidden dark:divide-stone-800">
-                  {filteredTasks.map((task) => (
-                    <li key={task.id} className="px-4 py-3">
+                  {completed.map((item) => (
+                    <li key={`${item.task.id}-${item.unit}`} className="px-4 py-3">
                       <div className="flex items-start justify-between gap-3">
-                        <p className="min-w-0 truncate text-sm font-semibold text-stone-900 dark:text-white">{employeeName(task.employeeId)}</p>
+                        <p className="min-w-0 truncate text-sm font-semibold text-stone-900 dark:text-white">{employeeName(item.task.employeeId)}</p>
                         <span className="shrink-0 text-sm font-semibold tabular-nums text-stone-900 dark:text-white">
-                          {task.points}
+                          {item.task.points}
                           <span className="ml-1 text-xs font-medium text-stone-400">pts</span>
                         </span>
                       </div>
-                      <p className="mt-0.5 truncate text-sm text-stone-700 dark:text-stone-300">{task.title || task.workTypeName}</p>
+                      <p className="mt-0.5 truncate text-sm text-stone-700 dark:text-stone-300">{completionLabel(item)}</p>
                       <p className="mt-0.5 truncate text-xs text-stone-500 dark:text-stone-400">
-                        {teamName(task.teamId)} · {task.workTypeName} · {formatDay(task.completedDate)}
+                        {teamName(item.task.teamId)} · {item.task.workTypeName} · {formatDay(item.day)}
                       </p>
                     </li>
                   ))}

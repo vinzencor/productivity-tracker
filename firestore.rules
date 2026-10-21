@@ -20,26 +20,78 @@ service cloud.firestore {
       return task.teamId in overrides ? overrides[task.teamId] : workType.defaultPoints;
     }
 
-    // Employees are not signed in, so the employee page may only flip a task between
-    // pending and completed. Everything else on a task stays HR-only.
+    function validPoints() {
+      let next = request.resource.data;
+      return next.points == resource.data.points || next.points == workTypePoints(resource.data);
+    }
+
+    function isSingle() {
+      return resource.data.get('count', 1) == 1;
+    }
+
+    // Employees are not signed in, so the employee page may only mark tasks done or undo that.
+    // Everything else on a task stays HR-only.
+
+    // Single tasks (count 1): flip between pending and completed.
     function isCompletion() {
       let next = request.resource.data;
-      return resource.data.status == 'pending'
+      return isSingle()
+        && resource.data.status == 'pending'
         && next.status == 'completed'
         && changesOnly(['status', 'points', 'completedAt', 'completedDate'])
         && next.completedAt is string
         && next.completedDate is string
         && next.completedDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
-        && (next.points == resource.data.points || next.points == workTypePoints(resource.data));
+        && validPoints();
     }
 
     function isReopen() {
       let next = request.resource.data;
-      return resource.data.status == 'completed'
+      return isSingle()
+        && resource.data.status == 'completed'
         && next.status == 'pending'
         && changesOnly(['status', 'completedAt', 'completedDate'])
         && !('completedAt' in next)
         && !('completedDate' in next);
+    }
+
+    // Multi-count tasks: status and completion fields must match the completions list.
+    function progressMatches(next, count) {
+      return next.completions.size() == count
+        ? next.status == 'completed'
+          && next.completedAt is string
+          && next.completedDate is string
+          && next.completedDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        : next.status == 'pending' && !('completedAt' in next) && !('completedDate' in next);
+    }
+
+    // One "Mark as done": exactly one new timestamp appended, earlier ones untouched.
+    function isCompletionStep() {
+      let next = request.resource.data;
+      let count = resource.data.get('count', 1);
+      let before = resource.data.get('completions', []);
+      return count > 1
+        && changesOnly(['completions', 'status', 'points', 'completedAt', 'completedDate'])
+        && next.completions is list
+        && next.completions.size() == before.size() + 1
+        && next.completions.size() <= count
+        && next.completions.hasAll(before)
+        && next.completions[next.completions.size() - 1] is string
+        && validPoints()
+        && progressMatches(next, count);
+    }
+
+    // One undo: exactly one timestamp removed.
+    function isUndoStep() {
+      let next = request.resource.data;
+      let count = resource.data.get('count', 1);
+      let before = resource.data.get('completions', []);
+      return count > 1
+        && changesOnly(['completions', 'status', 'completedAt', 'completedDate'])
+        && next.completions is list
+        && next.completions.size() == before.size() - 1
+        && before.hasAll(next.completions)
+        && progressMatches(next, count);
     }
 
     function isPointsTotalUpdate() {
@@ -65,7 +117,7 @@ service cloud.firestore {
     match /tasks/{taskId} {
       allow read: if true;
       allow create, delete: if isAdmin();
-      allow update: if isAdmin() || isCompletion() || isReopen();
+      allow update: if isAdmin() || isCompletion() || isReopen() || isCompletionStep() || isUndoStep();
     }
 
     match /admins/{uid} {

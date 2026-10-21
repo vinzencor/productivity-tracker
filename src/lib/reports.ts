@@ -1,4 +1,4 @@
-import type { Task } from '../types'
+import type { Completion } from './completions'
 
 export type DatePreset = 'today' | 'yesterday' | 'this-week' | 'this-month' | 'custom'
 
@@ -40,18 +40,9 @@ export function getRangeForPreset(preset: DatePreset) {
   return { start, end }
 }
 
-export function filterTasksByPeriod(tasks: Task[], period: DatePreset, customStart?: string, customEnd?: string) {
-  return tasks.filter((task) => {
-    if (task.status !== 'completed') {
-      return false
-    }
-
-    const rawDate = task.completedAt ?? task.completedDate
-    if (!rawDate) {
-      return false
-    }
-
-    const completedAt = new Date(rawDate)
+export function filterCompletionsByPeriod(items: Completion[], period: DatePreset, customStart?: string, customEnd?: string) {
+  return items.filter((item) => {
+    const completedAt = new Date(item.at)
     if (Number.isNaN(completedAt.getTime())) {
       return false
     }

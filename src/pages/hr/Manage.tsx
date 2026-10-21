@@ -13,6 +13,7 @@ import { PageHeader } from '../../components/PageHeader'
 import { SearchInput } from '../../components/SearchInput'
 import { SegmentedControl } from '../../components/SegmentedControl'
 import { StatusBadge } from '../../components/StatusBadge'
+import { sumEarned } from '../../lib/completions'
 import { completionTimestamp, dayKey, formatDay, relativeDayLabel, todayKey } from '../../lib/dates'
 import { errorMessage } from '../../lib/errors'
 import { getTaskPointsForTeam } from '../../lib/points'
@@ -45,6 +46,14 @@ const matches = (query: string, ...values: (string | undefined)[]) => {
 }
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
+
+const MAX_COUNT = 50
+
+/** Whole number from 1 to MAX_COUNT, or null when the input isn't one. */
+const parseCount = (value: string) => {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= MAX_COUNT ? parsed : null
+}
 
 function Field({ label, htmlFor, hint, children }: { label: string; htmlFor: string; hint?: string; children: ReactNode }) {
   return (
@@ -231,6 +240,7 @@ function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
   const [title, setTitle] = useState('')
   const [employeeId, setEmployeeId] = useState('')
   const [workTypeId, setWorkTypeId] = useState('')
+  const [countText, setCountText] = useState('1')
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | TaskStatus>('all')
@@ -243,6 +253,7 @@ function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
   const workTypeOptions = workTypes.filter((workType) => workType.active && isAllowedForTeam(workType, employee?.teamId ?? ''))
   const workType = workTypes.find((type) => type.id === workTypeId)
   const previewPoints = employee && workType ? getTaskPointsForTeam(workType, employee.teamId) : null
+  const count = parseCount(countText)
 
   const hrTasks = useMemo(
     () =>
@@ -276,7 +287,7 @@ function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
-    if (!title.trim() || !employee || !workType || !taskDate) return
+    if (!title.trim() || !employee || !workType || !taskDate || !count) return
 
     setSaving(true)
     const ok = await runAction(
@@ -289,6 +300,8 @@ function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
           title: title.trim(),
           status: 'pending',
           points: getTaskPointsForTeam(workType, employee.teamId),
+          count,
+          completions: [],
           taskDate,
           createdBy: 'hr',
         }),
@@ -298,6 +311,7 @@ function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
     if (ok) {
       setTitle('')
       setWorkTypeId('')
+      setCountText('1')
       // Jump the list to the day the task went to so HR sees it straight away.
       if (dateFilter !== ALL_DATES && dateFilter !== taskDate) setDateFilter(taskDate)
     }
@@ -360,11 +374,25 @@ function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
                     ))}
                   </select>
                 </Field>
+                <Field label="Count" htmlFor="task-count" hint="How many times the employee marks it done, e.g. 3 posters.">
+                  <input
+                    id="task-count"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={MAX_COUNT}
+                    value={countText}
+                    onChange={(event) => setCountText(event.target.value)}
+                    className="field"
+                  />
+                </Field>
                 <div className="flex items-center justify-between rounded-xl bg-stone-50 px-3 py-2.5 text-sm dark:bg-stone-800/60">
                   <span className="text-stone-500 dark:text-stone-400">Points on completion</span>
-                  <span className="font-semibold tabular-nums text-stone-900 dark:text-white">{previewPoints ?? '—'}</span>
+                  <span className="font-semibold tabular-nums text-stone-900 dark:text-white">
+                    {previewPoints === null || !count ? '—' : count > 1 ? `${previewPoints} × ${count} = ${previewPoints * count}` : previewPoints}
+                  </span>
                 </div>
-                <SubmitButton busy={saving} disabled={!title.trim() || !employee || !workType || !taskDate}>
+                <SubmitButton busy={saving} disabled={!title.trim() || !employee || !workType || !taskDate || !count}>
                   Assign task
                 </SubmitButton>
               </form>
@@ -454,22 +482,31 @@ type TaskRowProps = {
 
 function TaskRow({ task, showDate, employeeName, teamName, icon, onEdit, onDelete }: TaskRowProps) {
   const completedOtherDay = task.status === 'completed' && task.completedDate && task.completedDate !== task.taskDate
+  const multi = task.count > 1
   return (
     <li className="flex items-start gap-3 px-4 py-3.5 sm:items-center sm:px-5">
       <span className="icon-tile h-10 w-10 text-lg">{icon ?? '✨'}</span>
       <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-stone-900 dark:text-white">{task.title || task.workTypeName}</p>
+          <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-stone-900 dark:text-white">
+            <span className="truncate">{task.title || task.workTypeName}</span>
+            {multi ? (
+              <span className="badge bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300" title={`Count ${task.count}`}>
+                ×{task.count}
+              </span>
+            ) : null}
+          </p>
           <p className="mt-0.5 truncate text-xs text-stone-500 dark:text-stone-400">
             {showDate ? `${formatDay(task.taskDate)} · ` : null}
             {employeeName} · {teamName} · {task.workTypeName}
+            {multi ? ` · ${task.completions.length}/${task.count} done` : null}
             {completedOtherDay ? ` · done ${formatDay(task.completedDate)}` : null}
           </p>
         </div>
         <div className="flex items-center gap-3 sm:shrink-0">
           <StatusBadge status={task.status} />
           <span className="text-sm font-semibold tabular-nums text-stone-900 sm:w-14 sm:text-right dark:text-white">
-            {task.points}
+            {task.points * task.count}
             <span className="ml-1 text-xs font-medium text-stone-400">pts</span>
           </span>
           <div className="ml-auto flex items-center gap-1 sm:ml-0">
@@ -495,7 +532,8 @@ function TaskEditor({ task, onDone }: { task: Task; onDone: () => void }) {
   const [title, setTitle] = useState(task.title)
   const [employeeId, setEmployeeId] = useState(task.employeeId)
   const [workTypeId, setWorkTypeId] = useState(task.workTypeId)
-  const [status, setStatus] = useState<TaskStatus>(task.status)
+  const [countText, setCountText] = useState(String(task.count))
+  const [done, setDone] = useState(task.completions.length)
   const [taskDate, setTaskDate] = useState(task.taskDate)
   // Default a new completion to the task's own day (or today for a future task) so backfilled work lands on the right day.
   const [completedDate, setCompletedDate] = useState(() => task.completedDate ?? (task.taskDate < todayKey() ? task.taskDate : todayKey()))
@@ -504,20 +542,28 @@ function TaskEditor({ task, onDone }: { task: Task; onDone: () => void }) {
   const employee = employees.find((person) => person.id === employeeId)
   const workType = workTypes.find((type) => type.id === workTypeId)
   const workTypeOptions = workTypes.filter((type) => type.id === task.workTypeId || isAllowedForTeam(type, employee?.teamId ?? ''))
-  const completed = status === 'completed'
-  const completedDateValid = !completed || Boolean(completedDate && completedDate <= todayKey())
-  const valid = Boolean(title.trim() && taskDate && completedDateValid && employee && workType && isAllowedForTeam(workType, employee.teamId))
+  const count = parseCount(countText)
+  const doneCount = Math.min(done, count ?? done)
+  // A single completed task can move its completion day; otherwise the date applies to newly added completions.
+  const showCompletedOn = count === 1 ? doneCount === 1 : doneCount > task.completions.length
+  const completedDateValid = !showCompletedOn || Boolean(completedDate && completedDate <= todayKey())
+  const valid = Boolean(
+    title.trim() && taskDate && count && completedDateValid && employee && workType && isAllowedForTeam(workType, employee.teamId),
+  )
 
   const handleSave = async (event: FormEvent) => {
     event.preventDefault()
-    if (!valid || !employee || !workType) return
+    if (!valid || !employee || !workType || !count) return
 
-    // Keep the original timestamp unless HR moved the completion to another day.
-    const completedAt = !completed
-      ? undefined
-      : completedDate === task.completedDate && task.completedAt
-        ? task.completedAt
-        : completionTimestamp(completedDate)
+    // Keep existing timestamps; only new completions (or a moved single completion) get the chosen day.
+    let completions = task.completions.slice(0, doneCount)
+    if (count === 1 && doneCount === 1) {
+      const existing = task.completions[0]
+      const existingDay = task.completedDate ?? (existing ? dayKey(existing) : undefined)
+      completions = [existing && completedDate === existingDay ? existing : completionTimestamp(completedDate)]
+    } else {
+      while (completions.length < doneCount) completions.push(completionTimestamp(completedDate))
+    }
 
     setSaving(true)
     const ok = await runAction(
@@ -530,9 +576,8 @@ function TaskEditor({ task, onDone }: { task: Task; onDone: () => void }) {
           title: title.trim(),
           points: getTaskPointsForTeam(workType, employee.teamId),
           taskDate,
-          status,
-          completedDate: completed ? completedDate : undefined,
-          completedAt,
+          count,
+          completions,
         }),
       'Task updated',
     )
@@ -548,7 +593,7 @@ function TaskEditor({ task, onDone }: { task: Task; onDone: () => void }) {
         <Field label="Task title" htmlFor={`${id}-title`}>
           <input id={`${id}-title`} value={title} onChange={(event) => setTitle(event.target.value)} className="field" autoFocus />
         </Field>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Employee" htmlFor={`${id}-employee`}>
             <select id={`${id}-employee`} value={employeeId} onChange={(event) => setEmployeeId(event.target.value)} className="field">
               <option value="">Select employee</option>
@@ -565,19 +610,47 @@ function TaskEditor({ task, onDone }: { task: Task; onDone: () => void }) {
               ))}
             </select>
           </Field>
-          <Field label="Status" htmlFor={`${id}-status`}>
-            <select id={`${id}-status`} value={status} onChange={(event) => setStatus(event.target.value as TaskStatus)} className="field">
-              <option value="pending">Pending</option>
-              <option value="completed">Completed</option>
-            </select>
-          </Field>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Date" htmlFor={`${id}-date`}>
             <input id={`${id}-date`} type="date" value={taskDate} onChange={(event) => setTaskDate(event.target.value)} className="field" />
           </Field>
-          {completed ? (
-            <Field label="Completed on" htmlFor={`${id}-completed`} hint="Reports count the points on this day.">
+          <Field label="Count" htmlFor={`${id}-count`}>
+            <input
+              id={`${id}-count`}
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={MAX_COUNT}
+              value={countText}
+              onChange={(event) => setCountText(event.target.value)}
+              className="field"
+            />
+          </Field>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label={count === 1 ? 'Status' : 'Done'} htmlFor={`${id}-done`}>
+            <select id={`${id}-done`} value={doneCount} onChange={(event) => setDone(Number(event.target.value))} className="field">
+              {count === 1 ? (
+                <>
+                  <option value={0}>Pending</option>
+                  <option value={1}>Completed</option>
+                </>
+              ) : (
+                Array.from({ length: (count ?? doneCount) + 1 }, (_, value) => (
+                  <option key={value} value={value}>
+                    {value} of {count ?? '?'} done{value === count ? ' (completed)' : ''}
+                  </option>
+                ))
+              )}
+            </select>
+          </Field>
+          {showCompletedOn ? (
+            <Field
+              label="Completed on"
+              htmlFor={`${id}-completed`}
+              hint={count === 1 ? 'Reports count the points on this day.' : 'Newly done items count on this day in reports.'}
+            >
               <input
                 id={`${id}-completed`}
                 type="date"
@@ -691,7 +764,7 @@ function EmployeesTab({ onConfirm }: { onConfirm: RequestConfirm }) {
             <ul className="divide-y divide-stone-100 dark:divide-stone-800">
               {visibleEmployees.map((employee) => {
                 const employeeTasks = tasks.filter((task) => task.employeeId === employee.id)
-                const points = employeeTasks.filter((task) => task.status === 'completed').reduce((sum, task) => sum + task.points, 0)
+                const points = sumEarned(employeeTasks)
                 return (
                   <li key={employee.id} className="flex items-center gap-3 px-4 py-3 sm:px-5">
                     <Avatar name={employee.name} />
@@ -965,9 +1038,7 @@ function WorkTypesTab({ onConfirm }: { onConfirm: RequestConfirm }) {
           ) : (
             <ul className="divide-y divide-stone-100 dark:divide-stone-800">
               {workTypes.map((type) => {
-                const earned = tasks
-                  .filter((task) => task.workTypeId === type.id && task.status === 'completed')
-                  .reduce((sum, task) => sum + task.points, 0)
+                const earned = sumEarned(tasks.filter((task) => task.workTypeId === type.id))
                 const allowed = type.allowedTeamIds?.length
                   ? type.allowedTeamIds.map((teamId) => teams.find((team) => team.id === teamId)?.name).filter(Boolean).join(', ')
                   : 'All teams'

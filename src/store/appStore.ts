@@ -1,8 +1,8 @@
-import { format } from 'date-fns'
 import { collection, deleteDoc, deleteField, doc, increment, onSnapshot, setDoc, writeBatch } from 'firebase/firestore'
 import { create } from 'zustand'
 
 import { db } from '../firebase'
+import { earnedPoints, progressFields } from '../lib/completions'
 import { dayKey } from '../lib/dates'
 import { getTaskPointsForTeam } from '../lib/points'
 import type { DemoData, Employee, Task, Team, WorkType } from '../types'
@@ -99,6 +99,17 @@ const mapWorkType = (data: Record<string, unknown> & { id?: string }): WorkType 
 
 const mapTask = (data: Record<string, unknown> & { id?: string }): Task => {
   const createdAt = (data.createdAt as string) ?? new Date().toISOString()
+  const completedAt = (data.completedAt as string | undefined) ?? undefined
+  const completedDate = (data.completedDate as string | undefined) ?? undefined
+  const count = Math.max(1, Math.floor(Number(data.count ?? 1)) || 1)
+  const storedStatus = (data.status as Task['status']) ?? 'pending'
+  // Multi-count tasks store every completion; single tasks (and all older tasks) only store status + completedAt.
+  const completions =
+    count > 1 && Array.isArray(data.completions)
+      ? (data.completions as unknown[]).filter((value): value is string => typeof value === 'string')
+      : storedStatus === 'completed'
+        ? [completedAt ?? (completedDate ? new Date(`${completedDate}T12:00:00`).toISOString() : createdAt)]
+        : []
   return {
     id: (data.id as string) ?? '',
     employeeId: (data.employeeId as string) ?? '',
@@ -106,13 +117,15 @@ const mapTask = (data: Record<string, unknown> & { id?: string }): Task => {
     workTypeId: (data.workTypeId as string) ?? '',
     workTypeName: (data.workTypeName as string) ?? '',
     title: (data.title as string) ?? '',
-    status: (data.status as Task['status']) ?? 'pending',
+    status: completions.length >= count ? 'completed' : 'pending',
     points: Number(data.points ?? 0),
+    count,
+    completions,
     // Tasks created before dates could be picked belong to the day they were created.
     taskDate: (data.taskDate as string | undefined) ?? dayKey(createdAt),
     createdAt,
-    completedAt: (data.completedAt as string | undefined) ?? undefined,
-    completedDate: (data.completedDate as string | undefined) ?? undefined,
+    completedAt,
+    completedDate,
     createdBy: (data.createdBy as Task['createdBy']) ?? 'hr',
   }
 }
@@ -233,54 +246,52 @@ export const useAppStore = create<AppState>()((set, get) => ({
       id: `task-${crypto.randomUUID()}`,
       createdAt: new Date().toISOString(),
     }
-    await setDoc(doc(db, 'tasks', newTask.id), newTask)
+    const { completions, ...fields } = newTask
+    // Single tasks keep the original document shape; only multi-count tasks carry a completions list.
+    await setDoc(doc(db, 'tasks', newTask.id), newTask.count > 1 ? { ...fields, completions } : fields)
     return newTask
   },
   completeTask: async (taskId) => {
     const task = get().tasks.find((item) => item.id === taskId)
-    if (!task || task.status === 'completed') {
+    if (!task || task.completions.length >= task.count) {
       return undefined
     }
 
     const workType = get().workTypes.find((item) => item.id === task.workTypeId)
     // Older reverted tasks were stored with 0 points; fall back to the work type's value for those.
     const points = workType ? getTaskPointsForTeam(workType, task.teamId, task.points || undefined) : task.points || 0
-    const completion = {
-      status: 'completed' as const,
-      points,
-      completedAt: new Date().toISOString(),
-      completedDate: format(new Date(), 'yyyy-MM-dd'),
-    }
+    const completions = [...task.completions, new Date().toISOString()]
+    const progress = progressFields(task.count, completions)
+    const earned = points * completions.length - earnedPoints(task)
+
     // One batch so the task and the employee total never disagree if a write is rejected.
     const batch = writeBatch(db)
-    batch.update(doc(db, 'tasks', taskId), completion)
+    batch.update(doc(db, 'tasks', taskId), toFirestoreUpdate({ ...progress, points }))
     const employee = get().employees.find((person) => person.id === task.employeeId)
     if (employee) {
-      batch.update(doc(db, 'employees', employee.id), { totalPoints: increment(points) })
+      batch.update(doc(db, 'employees', employee.id), { totalPoints: increment(earned) })
     }
     await batch.commit()
 
     set((state) => ({
-      tasks: state.tasks.map((item) => (item.id === taskId ? { ...item, ...completion } : item)),
+      tasks: state.tasks.map((item) => (item.id === taskId ? { ...item, ...progress, points, completions } : item)),
       employees: state.employees.map((person) =>
-        person.id === employee?.id ? { ...person, totalPoints: person.totalPoints + points } : person,
+        person.id === employee?.id ? { ...person, totalPoints: person.totalPoints + earned } : person,
       ),
     }))
-    return points
+    return earned
   },
   revertTask: async (taskId) => {
     const task = get().tasks.find((item) => item.id === taskId)
-    if (!task || task.status === 'pending') {
+    if (!task || task.completions.length === 0) {
       return
     }
 
-    // Points stay on the task so completing it again awards the same amount.
+    // Undo the latest completion. Points stay on the task so completing it again awards the same amount.
+    const completions = task.completions.slice(0, -1)
+    const progress = progressFields(task.count, completions)
     const batch = writeBatch(db)
-    batch.update(doc(db, 'tasks', taskId), {
-      status: 'pending',
-      completedAt: deleteField(),
-      completedDate: deleteField(),
-    })
+    batch.update(doc(db, 'tasks', taskId), toFirestoreUpdate(progress))
     const employee = get().employees.find((person) => person.id === task.employeeId)
     if (employee) {
       batch.update(doc(db, 'employees', employee.id), { totalPoints: increment(-task.points) })
@@ -288,9 +299,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     await batch.commit()
 
     set((state) => ({
-      tasks: state.tasks.map((item) =>
-        item.id === taskId ? { ...item, status: 'pending', completedAt: undefined, completedDate: undefined } : item,
-      ),
+      tasks: state.tasks.map((item) => (item.id === taskId ? { ...item, ...progress, completions } : item)),
       employees: state.employees.map((person) =>
         person.id === employee?.id ? { ...person, totalPoints: person.totalPoints - task.points } : person,
       ),
@@ -299,17 +308,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
   deleteTask: async (taskId) => {
     const task = get().tasks.find((item) => item.id === taskId)
     const employee = get().employees.find((person) => person.id === task?.employeeId)
+    const earned = task ? earnedPoints(task) : 0
     const batch = writeBatch(db)
     batch.delete(doc(db, 'tasks', taskId))
-    // A deleted completed task no longer counts, so take its points back off the employee total.
-    if (task?.status === 'completed' && employee) {
-      batch.update(doc(db, 'employees', employee.id), { totalPoints: increment(-task.points) })
+    // A deleted task no longer counts, so take any points it earned back off the employee total.
+    if (earned && employee) {
+      batch.update(doc(db, 'employees', employee.id), { totalPoints: increment(-earned) })
     }
     await batch.commit()
     set((state) => ({
       tasks: state.tasks.filter((item) => item.id !== taskId),
       employees: state.employees.map((person) =>
-        person.id === employee?.id && task?.status === 'completed' ? { ...person, totalPoints: person.totalPoints - task.points } : person,
+        person.id === employee?.id && earned ? { ...person, totalPoints: person.totalPoints - earned } : person,
       ),
     }))
   },
@@ -342,15 +352,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!task) {
       return
     }
-    const next = { ...task, ...updates }
+    // Status and completion fields always follow count + completions, whatever HR changed.
+    const merged = { ...task, ...updates }
+    const progress = progressFields(merged.count, merged.completions)
+    const next = { ...merged, ...progress, completions: merged.completions }
 
-    // HR can change status, points or assignee here, so move the completed points between employee totals.
+    // HR can change completions, points or assignee here, so move earned points between employee totals.
     const deltas = new Map<string, number>()
-    if (task.status === 'completed') deltas.set(task.employeeId, -task.points)
-    if (next.status === 'completed') deltas.set(next.employeeId, (deltas.get(next.employeeId) ?? 0) + next.points)
+    deltas.set(task.employeeId, -earnedPoints(task))
+    deltas.set(next.employeeId, (deltas.get(next.employeeId) ?? 0) + earnedPoints(next))
 
     const batch = writeBatch(db)
-    batch.update(doc(db, 'tasks', taskId), toFirestoreUpdate(updates))
+    batch.update(doc(db, 'tasks', taskId), toFirestoreUpdate({ ...updates, ...progress }))
     const knownEmployees = new Set(get().employees.map((person) => person.id))
     deltas.forEach((delta, employeeId) => {
       if (delta !== 0 && knownEmployees.has(employeeId)) {

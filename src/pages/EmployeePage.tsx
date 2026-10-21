@@ -13,6 +13,7 @@ import { SearchInput } from '../components/SearchInput'
 import { SegmentedControl } from '../components/SegmentedControl'
 import { TaskTile } from '../components/TaskTile'
 import { ThemeToggle } from '../components/ThemeToggle'
+import { sumEarned } from '../lib/completions'
 import { errorMessage } from '../lib/errors'
 import { getLevelFromPoints, getProgressToNextLevel } from '../lib/points'
 import { useAppStore } from '../store/appStore'
@@ -62,7 +63,7 @@ export function EmployeePage() {
     })
   }, [employeeTasks, taskFilter, taskSearch])
 
-  const points = employeeTasks.filter((task) => task.status === 'completed').reduce((sum, task) => sum + task.points, 0)
+  const points = sumEarned(employeeTasks)
   const pendingCount = employeeTasks.filter((task) => task.status === 'pending').length
   const completedCount = employeeTasks.length - pendingCount
   const level = getProgressToNextLevel(points)
@@ -81,21 +82,27 @@ export function EmployeePage() {
 
   const handleComplete = (taskId: string) =>
     runTaskAction(taskId, async () => {
+      const task = tasks.find((item) => item.id === taskId)
       const previousLevel = getLevelFromPoints(points)
       const earned = await completeTask(taskId)
-      if (earned === undefined) return
+      if (earned === undefined || !task) return
+      const progress = task.count > 1 ? ` · ${task.completions.length + 1} of ${task.count} done` : ''
       if (getLevelFromPoints(points + earned) > previousLevel) {
         confetti({ spread: 120, particleCount: 160, origin: { y: 0.7 } })
-        toast.success(`Level up! You reached level ${getLevelFromPoints(points + earned)}`)
+        toast.success(`Level up! You reached level ${getLevelFromPoints(points + earned)}${progress}`)
       } else {
-        toast.success(`Nice work! +${earned} pts`)
+        toast.success(`Nice work! +${earned} pts${progress}`)
       }
     })
 
   const handleRevert = (taskId: string) =>
     runTaskAction(taskId, async () => {
+      const task = tasks.find((item) => item.id === taskId)
       await revertTask(taskId)
-      toast('Task moved back to pending', { icon: '↩️' })
+      toast(
+        task && task.count > 1 ? `Undone · ${task.completions.length - 1} of ${task.count} done` : 'Task moved back to pending',
+        { icon: '↩️' },
+      )
     })
 
   const handleDelete = (taskId: string) => {

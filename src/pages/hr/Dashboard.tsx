@@ -10,10 +10,9 @@ import { EmptyState } from '../../components/EmptyState'
 import { SectionLoader } from '../../components/Loader'
 import { PageHeader } from '../../components/PageHeader'
 import { StatCard } from '../../components/StatCard'
+import { completionsOf, sumCompletionPoints } from '../../lib/completions'
 import { todayKey } from '../../lib/dates'
 import { useAppStore } from '../../store/appStore'
-
-const sumPoints = (items: { points: number }[]) => items.reduce((sum, item) => sum + item.points, 0)
 
 export function DashboardPage() {
   const loaded = useAppStore((state) => state.loaded)
@@ -23,23 +22,23 @@ export function DashboardPage() {
   const workTypes = useAppStore((state) => state.workTypes)
 
   const stats = useMemo(() => {
-    const completed = tasks.filter((task) => task.status === 'completed')
+    // Points come from every "Mark as done"; Completed/Pending count whole tasks.
+    const completions = completionsOf(tasks)
+    const completedCount = tasks.filter((task) => task.status === 'completed').length
     const today = todayKey()
     return {
-      completed,
-      totalPoints: sumPoints(completed),
-      pointsToday: sumPoints(completed.filter((task) => task.completedDate === today)),
-      completedCount: completed.length,
-      pendingCount: tasks.length - completed.length,
-      completionRate: tasks.length ? Math.round((completed.length / tasks.length) * 100) : 0,
+      completions,
+      totalPoints: sumCompletionPoints(completions),
+      pointsToday: sumCompletionPoints(completions.filter((item) => item.day === today)),
+      completedCount,
+      pendingCount: tasks.length - completedCount,
+      completionRate: tasks.length ? Math.round((completedCount / tasks.length) * 100) : 0,
     }
   }, [tasks])
 
   const trend = useMemo(() => {
     const pointsByDay = new Map<string, number>()
-    stats.completed.forEach((task) => {
-      if (task.completedDate) pointsByDay.set(task.completedDate, (pointsByDay.get(task.completedDate) ?? 0) + task.points)
-    })
+    stats.completions.forEach(({ day, task }) => pointsByDay.set(day, (pointsByDay.get(day) ?? 0) + task.points))
     return Array.from({ length: 30 }, (_, index) => {
       const day = subDays(new Date(), 29 - index)
       return {
@@ -48,7 +47,7 @@ export function DashboardPage() {
         value: pointsByDay.get(format(day, 'yyyy-MM-dd')) ?? 0,
       }
     })
-  }, [stats.completed])
+  }, [stats.completions])
 
   const trendTotal = trend.reduce((sum, day) => sum + day.value, 0)
 
@@ -59,19 +58,19 @@ export function DashboardPage() {
           id: employee.id,
           name: employee.name,
           team: teams.find((team) => team.id === employee.teamId)?.name ?? 'No team',
-          points: sumPoints(stats.completed.filter((task) => task.employeeId === employee.id)),
+          points: sumCompletionPoints(stats.completions.filter(({ task }) => task.employeeId === employee.id)),
         }))
         .sort((left, right) => right.points - left.points)
         .slice(0, 5),
-    [employees, stats.completed, teams],
+    [employees, stats.completions, teams],
   )
 
   const teamChart = useMemo(
     () =>
       teams
-        .map((team) => ({ name: team.name, value: sumPoints(stats.completed.filter((task) => task.teamId === team.id)) }))
+        .map((team) => ({ name: team.name, value: sumCompletionPoints(stats.completions.filter(({ task }) => task.teamId === team.id)) }))
         .sort((left, right) => right.value - left.value),
-    [stats.completed, teams],
+    [stats.completions, teams],
   )
 
   const workTypeChart = useMemo(
@@ -80,11 +79,11 @@ export function DashboardPage() {
         .filter((workType) => workType.active)
         .map((workType) => ({
           name: workType.name,
-          value: sumPoints(stats.completed.filter((task) => task.workTypeId === workType.id)),
+          value: sumCompletionPoints(stats.completions.filter(({ task }) => task.workTypeId === workType.id)),
         }))
         .sort((left, right) => right.value - left.value)
         .slice(0, 8),
-    [stats.completed, workTypes],
+    [stats.completions, workTypes],
   )
 
   const handleCopyLink = async () => {
