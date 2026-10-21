@@ -35,6 +35,8 @@ export type Task = {
   title: string
   status: TaskStatus
   points: number
+  /** Day the task is assigned for (yyyy-MM-dd, local). Older tasks fall back to their createdAt day. */
+  taskDate: string
   createdAt: string
   completedAt?: string
   completedDate?: string

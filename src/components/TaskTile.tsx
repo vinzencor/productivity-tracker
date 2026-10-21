@@ -11,7 +11,8 @@ type TaskTileProps = {
   busy?: boolean
   onComplete: (taskId: string) => void
   onRevert: (taskId: string) => void
-  onDelete: (taskId: string) => void
+  /** Omit to hide the delete button (deleting is HR-only). */
+  onDelete?: (taskId: string) => void
 }
 
 export function TaskTile({ task, workType, busy = false, onComplete, onRevert, onDelete }: TaskTileProps) {
@@ -46,16 +47,18 @@ export function TaskTile({ task, workType, busy = false, onComplete, onRevert, o
             Move to pending
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => onDelete(task.id)}
-          disabled={busy}
-          className="btn btn-ghost-danger btn-icon"
-          aria-label={`Delete ${title}`}
-          title="Delete"
-        >
-          <Trash size={15} />
-        </button>
+        {onDelete ? (
+          <button
+            type="button"
+            onClick={() => onDelete(task.id)}
+            disabled={busy}
+            className="btn btn-ghost-danger btn-icon"
+            aria-label={`Delete ${title}`}
+            title="Delete"
+          >
+            <Trash size={15} />
+          </button>
+        ) : null}
       </div>
     </li>
   )

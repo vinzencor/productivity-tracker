@@ -1,8 +1,9 @@
 import { format } from 'date-fns'
-import { collection, deleteDoc, deleteField, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore'
+import { collection, deleteDoc, deleteField, doc, increment, onSnapshot, setDoc, writeBatch } from 'firebase/firestore'
 import { create } from 'zustand'
 
 import { db } from '../firebase'
+import { dayKey } from '../lib/dates'
 import { getTaskPointsForTeam } from '../lib/points'
 import type { DemoData, Employee, Task, Team, WorkType } from '../types'
 
@@ -96,20 +97,25 @@ const mapWorkType = (data: Record<string, unknown> & { id?: string }): WorkType 
   createdAt: (data.createdAt as string) ?? new Date().toISOString(),
 })
 
-const mapTask = (data: Record<string, unknown> & { id?: string }): Task => ({
-  id: (data.id as string) ?? '',
-  employeeId: (data.employeeId as string) ?? '',
-  teamId: (data.teamId as string) ?? '',
-  workTypeId: (data.workTypeId as string) ?? '',
-  workTypeName: (data.workTypeName as string) ?? '',
-  title: (data.title as string) ?? '',
-  status: (data.status as Task['status']) ?? 'pending',
-  points: Number(data.points ?? 0),
-  createdAt: (data.createdAt as string) ?? new Date().toISOString(),
-  completedAt: (data.completedAt as string | undefined) ?? undefined,
-  completedDate: (data.completedDate as string | undefined) ?? undefined,
-  createdBy: (data.createdBy as Task['createdBy']) ?? 'hr',
-})
+const mapTask = (data: Record<string, unknown> & { id?: string }): Task => {
+  const createdAt = (data.createdAt as string) ?? new Date().toISOString()
+  return {
+    id: (data.id as string) ?? '',
+    employeeId: (data.employeeId as string) ?? '',
+    teamId: (data.teamId as string) ?? '',
+    workTypeId: (data.workTypeId as string) ?? '',
+    workTypeName: (data.workTypeName as string) ?? '',
+    title: (data.title as string) ?? '',
+    status: (data.status as Task['status']) ?? 'pending',
+    points: Number(data.points ?? 0),
+    // Tasks created before dates could be picked belong to the day they were created.
+    taskDate: (data.taskDate as string | undefined) ?? dayKey(createdAt),
+    createdAt,
+    completedAt: (data.completedAt as string | undefined) ?? undefined,
+    completedDate: (data.completedDate as string | undefined) ?? undefined,
+    createdBy: (data.createdBy as Task['createdBy']) ?? 'hr',
+  }
+}
 
 const byName = <T extends { name: string }>(left: T, right: T) => left.name.localeCompare(right.name)
 
@@ -245,17 +251,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
       completedAt: new Date().toISOString(),
       completedDate: format(new Date(), 'yyyy-MM-dd'),
     }
-    await updateDoc(doc(db, 'tasks', taskId), completion)
-
+    // One batch so the task and the employee total never disagree if a write is rejected.
+    const batch = writeBatch(db)
+    batch.update(doc(db, 'tasks', taskId), completion)
     const employee = get().employees.find((person) => person.id === task.employeeId)
     if (employee) {
-      await updateDoc(doc(db, 'employees', employee.id), { totalPoints: employee.totalPoints + points })
+      batch.update(doc(db, 'employees', employee.id), { totalPoints: increment(points) })
     }
+    await batch.commit()
 
     set((state) => ({
       tasks: state.tasks.map((item) => (item.id === taskId ? { ...item, ...completion } : item)),
       employees: state.employees.map((person) =>
-        person.id === employee?.id ? { ...person, totalPoints: employee.totalPoints + points } : person,
+        person.id === employee?.id ? { ...person, totalPoints: person.totalPoints + points } : person,
       ),
     }))
     return points
@@ -267,29 +275,42 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
 
     // Points stay on the task so completing it again awards the same amount.
-    await updateDoc(doc(db, 'tasks', taskId), {
+    const batch = writeBatch(db)
+    batch.update(doc(db, 'tasks', taskId), {
       status: 'pending',
       completedAt: deleteField(),
       completedDate: deleteField(),
     })
-
     const employee = get().employees.find((person) => person.id === task.employeeId)
-    const nextPoints = employee ? Math.max(employee.totalPoints - task.points, 0) : 0
     if (employee) {
-      await updateDoc(doc(db, 'employees', employee.id), { totalPoints: nextPoints })
+      batch.update(doc(db, 'employees', employee.id), { totalPoints: increment(-task.points) })
     }
+    await batch.commit()
 
     set((state) => ({
       tasks: state.tasks.map((item) =>
         item.id === taskId ? { ...item, status: 'pending', completedAt: undefined, completedDate: undefined } : item,
       ),
-      employees: state.employees.map((person) => (person.id === employee?.id ? { ...person, totalPoints: nextPoints } : person)),
+      employees: state.employees.map((person) =>
+        person.id === employee?.id ? { ...person, totalPoints: person.totalPoints - task.points } : person,
+      ),
     }))
   },
   deleteTask: async (taskId) => {
-    await deleteDoc(doc(db, 'tasks', taskId))
+    const task = get().tasks.find((item) => item.id === taskId)
+    const employee = get().employees.find((person) => person.id === task?.employeeId)
+    const batch = writeBatch(db)
+    batch.delete(doc(db, 'tasks', taskId))
+    // A deleted completed task no longer counts, so take its points back off the employee total.
+    if (task?.status === 'completed' && employee) {
+      batch.update(doc(db, 'employees', employee.id), { totalPoints: increment(-task.points) })
+    }
+    await batch.commit()
     set((state) => ({
       tasks: state.tasks.filter((item) => item.id !== taskId),
+      employees: state.employees.map((person) =>
+        person.id === employee?.id && task?.status === 'completed' ? { ...person, totalPoints: person.totalPoints - task.points } : person,
+      ),
     }))
   },
   deleteTeam: async (teamId) => {
@@ -321,9 +342,29 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!task) {
       return
     }
-    await updateDoc(doc(db, 'tasks', taskId), toFirestoreUpdate(updates))
+    const next = { ...task, ...updates }
+
+    // HR can change status, points or assignee here, so move the completed points between employee totals.
+    const deltas = new Map<string, number>()
+    if (task.status === 'completed') deltas.set(task.employeeId, -task.points)
+    if (next.status === 'completed') deltas.set(next.employeeId, (deltas.get(next.employeeId) ?? 0) + next.points)
+
+    const batch = writeBatch(db)
+    batch.update(doc(db, 'tasks', taskId), toFirestoreUpdate(updates))
+    const knownEmployees = new Set(get().employees.map((person) => person.id))
+    deltas.forEach((delta, employeeId) => {
+      if (delta !== 0 && knownEmployees.has(employeeId)) {
+        batch.update(doc(db, 'employees', employeeId), { totalPoints: increment(delta) })
+      }
+    })
+    await batch.commit()
+
     set((state) => ({
-      tasks: state.tasks.map((item) => (item.id === taskId ? { ...item, ...updates } : item)),
+      tasks: state.tasks.map((item) => (item.id === taskId ? next : item)),
+      employees: state.employees.map((person) => {
+        const delta = deltas.get(person.id)
+        return delta ? { ...person, totalPoints: person.totalPoints + delta } : person
+      }),
     }))
   },
 }))
