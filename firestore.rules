@@ -9,6 +9,43 @@ service cloud.firestore {
       return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
+    function changesOnly(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+
+    // Points the app awards on completion: the team override, else the work type default.
+    function workTypePoints(task) {
+      let workType = get(/databases/$(database)/documents/workTypes/$(task.workTypeId)).data;
+      let overrides = workType.get('teamOverrides', {});
+      return task.teamId in overrides ? overrides[task.teamId] : workType.defaultPoints;
+    }
+
+    // Employees are not signed in, so the employee page may only flip a task between
+    // pending and completed. Everything else on a task stays HR-only.
+    function isCompletion() {
+      let next = request.resource.data;
+      return resource.data.status == 'pending'
+        && next.status == 'completed'
+        && changesOnly(['status', 'points', 'completedAt', 'completedDate'])
+        && next.completedAt is string
+        && next.completedDate is string
+        && next.completedDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && (next.points == resource.data.points || next.points == workTypePoints(resource.data));
+    }
+
+    function isReopen() {
+      let next = request.resource.data;
+      return resource.data.status == 'completed'
+        && next.status == 'pending'
+        && changesOnly(['status', 'completedAt', 'completedDate'])
+        && !('completedAt' in next)
+        && !('completedDate' in next);
+    }
+
+    function isPointsTotalUpdate() {
+      return changesOnly(['totalPoints']) && request.resource.data.totalPoints is number;
+    }
+
     match /teams/{teamId} {
       allow read: if true;
       allow create, update, delete: if isAdmin();
@@ -16,7 +53,8 @@ service cloud.firestore {
 
     match /employees/{empId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || isPointsTotalUpdate();
     }
 
     match /workTypes/{typeId} {
@@ -26,7 +64,8 @@ service cloud.firestore {
 
     match /tasks/{taskId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || isCompletion() || isReopen();
     }
 
     match /admins/{uid} {

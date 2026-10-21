@@ -70,7 +70,7 @@ The HR login will check the authenticated UID against this collection and allow 
 
 ## Firestore rules
 
-The repository includes `firestore.rules` and `firestore.indexes.json` with the initial access model for employee and HR roles. The rules allow signed-in users to read shared data, anonymous users to create pending tasks and complete them, and only admins to manage master data and task corrections.
+The repository includes `firestore.rules` and `firestore.indexes.json` with the initial access model for employee and HR roles. The rules allow anyone to read shared data. Employees are not signed in, so the employee page may only mark a task as done (awarding the work type's points) or move it back to pending, plus the matching change to the employee's `totalPoints`. Creating, editing and deleting tasks, and managing teams, employees and work types, is admin-only.
 
 ## Deployment
 

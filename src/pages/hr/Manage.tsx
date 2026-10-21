@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { Briefcase, ClipboardList, Pencil, Plus, Shapes, Trash, UserRound, Users } from 'lucide-react'
+import { addDays, format, parseISO, subDays } from 'date-fns'
+import { Briefcase, ChevronLeft, ChevronRight, ClipboardList, Pencil, Plus, Shapes, Trash, UserRound, Users } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useSearchParams } from 'react-router-dom'
 
@@ -12,7 +13,7 @@ import { PageHeader } from '../../components/PageHeader'
 import { SearchInput } from '../../components/SearchInput'
 import { SegmentedControl } from '../../components/SegmentedControl'
 import { StatusBadge } from '../../components/StatusBadge'
-import { todayKey } from '../../lib/dates'
+import { completionTimestamp, dayKey, formatDay, relativeDayLabel, todayKey } from '../../lib/dates'
 import { errorMessage } from '../../lib/errors'
 import { getTaskPointsForTeam } from '../../lib/points'
 import { useAppStore } from '../../store/appStore'
@@ -68,7 +69,7 @@ function SubmitButton({ busy, disabled, children }: { busy: boolean; disabled: b
 
 function SplitLayout({ form, list }: { form: ReactNode; list: ReactNode }) {
   return (
-    <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
+    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
       <div className="lg:sticky lg:top-8">{form}</div>
       {list}
     </div>
@@ -166,6 +167,59 @@ export function ManagePage() {
 
 /* ------------------------------------------------------------------ Tasks */
 
+const ALL_DATES = 'all'
+
+type DateBarProps = {
+  value: string
+  onChange: (value: string) => void
+  countFor: (day: string) => number
+  total: number
+}
+
+function DateBar({ value, onChange, countFor, total }: DateBarProps) {
+  const quickDays = [0, 1, 2].map((offset) => dayKey(subDays(new Date(), offset)))
+  const shift = (days: number) => onChange(dayKey(addDays(parseISO(value === ALL_DATES ? todayKey() : value), days)))
+
+  return (
+    <section className="card flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+      <div className="flex min-w-0 items-center gap-2">
+        <button type="button" onClick={() => shift(-1)} className="btn btn-secondary btn-icon h-10 w-10" aria-label="Previous day" title="Previous day">
+          <ChevronLeft size={16} />
+        </button>
+        <label htmlFor="task-day" className="sr-only">
+          Show tasks for date
+        </label>
+        <input
+          id="task-day"
+          type="date"
+          value={value === ALL_DATES ? '' : value}
+          onChange={(event) => onChange(event.target.value || ALL_DATES)}
+          className="field flex-1 sm:w-44 sm:flex-none"
+        />
+        <button type="button" onClick={() => shift(1)} className="btn btn-secondary btn-icon h-10 w-10" aria-label="Next day" title="Next day">
+          <ChevronRight size={16} />
+        </button>
+      </div>
+      {/* Natural-width tabs so "Yesterday" isn't truncated on narrow phones. */}
+      <div className="min-w-0">
+        <SegmentedControl
+          label="Quick dates"
+          value={value}
+          onChange={onChange}
+          options={[
+            ...quickDays.map((day, index) => ({
+              value: day,
+              label: index < 2 ? relativeDayLabel(day) : format(parseISO(day), 'EEE d'),
+              count: countFor(day),
+            })),
+            { value: ALL_DATES, label: 'All dates', count: total },
+          ]}
+        />
+      </div>
+    </section>
+  )
+}
+
 function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
   const teams = useAppStore((state) => state.teams)
   const employees = useAppStore((state) => state.employees)
@@ -181,6 +235,9 @@ function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | TaskStatus>('all')
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
+  // `dateFilter` picks which day the list shows; `taskDate` is the day new tasks are assigned to and follows it.
+  const [dateFilter, setDateFilter] = useState(() => todayKey())
+  const [taskDate, setTaskDate] = useState(() => todayKey())
 
   const employee = employees.find((person) => person.id === employeeId)
   const workTypeOptions = workTypes.filter((workType) => workType.active && isAllowedForTeam(workType, employee?.teamId ?? ''))
@@ -191,14 +248,25 @@ function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
     () =>
       tasks
         .filter((task) => task.createdBy === 'hr')
-        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
+        .sort(
+          (left, right) =>
+            right.taskDate.localeCompare(left.taskDate) || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+        ),
     [tasks],
   )
 
-  const visibleTasks = hrTasks.filter((task) => {
+  const dayTasks = dateFilter === ALL_DATES ? hrTasks : hrTasks.filter((task) => task.taskDate === dateFilter)
+
+  const visibleTasks = dayTasks.filter((task) => {
     const person = employees.find((item) => item.id === task.employeeId)
     return (statusFilter === 'all' || task.status === statusFilter) && matches(search, task.title, task.workTypeName, person?.name)
   })
+
+  const handleDateFilterChange = (next: string) => {
+    setDateFilter(next)
+    if (next !== ALL_DATES) setTaskDate(next)
+    setEditingTaskId(null)
+  }
 
   const handleEmployeeChange = (nextEmployeeId: string) => {
     setEmployeeId(nextEmployeeId)
@@ -208,7 +276,7 @@ function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
-    if (!title.trim() || !employee || !workType) return
+    if (!title.trim() || !employee || !workType || !taskDate) return
 
     setSaving(true)
     const ok = await runAction(
@@ -221,132 +289,162 @@ function TasksTab({ onConfirm }: { onConfirm: RequestConfirm }) {
           title: title.trim(),
           status: 'pending',
           points: getTaskPointsForTeam(workType, employee.teamId),
+          taskDate,
           createdBy: 'hr',
         }),
-      `Task assigned to ${employee.name}`,
+      `Task assigned to ${employee.name}${taskDate === todayKey() ? '' : ` for ${formatDay(taskDate)}`}`,
     )
     setSaving(false)
     if (ok) {
       setTitle('')
       setWorkTypeId('')
+      // Jump the list to the day the task went to so HR sees it straight away.
+      if (dateFilter !== ALL_DATES && dateFilter !== taskDate) setDateFilter(taskDate)
     }
   }
 
-  const pendingCount = hrTasks.filter((task) => task.status === 'pending').length
+  const pendingCount = dayTasks.filter((task) => task.status === 'pending').length
+  const showingAll = dateFilter === ALL_DATES
+  const summary = `${plural(dayTasks.length, 'task')} · ${pendingCount} pending`
 
   return (
-    <SplitLayout
-      form={
-        <Card title="Assign task" description="Create a task for an employee" icon={Plus}>
-          {employees.length === 0 || workTypes.length === 0 ? (
-            <EmptyState
-              icon={ClipboardList}
-              title="Set up first"
-              description="Add at least one employee and one work type before assigning tasks."
-            />
-          ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <Field label="Task title" htmlFor="task-title">
-                <input
-                  id="task-title"
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                  placeholder="e.g. Diwali campaign poster"
-                  className="field"
-                />
-              </Field>
-              <Field label="Employee" htmlFor="task-employee">
-                <select id="task-employee" value={employeeId} onChange={(event) => handleEmployeeChange(event.target.value)} className="field">
-                  <option value="">Select employee</option>
-                  <EmployeeOptions employees={employees} teams={teams} />
-                </select>
-              </Field>
-              <Field label="Work type" htmlFor="task-work-type" hint={employee ? undefined : 'Pick an employee to see the work types for their team.'}>
-                <select id="task-work-type" value={workTypeId} onChange={(event) => setWorkTypeId(event.target.value)} className="field">
-                  <option value="">Select work type</option>
-                  {workTypeOptions.map((type) => (
-                    <option key={type.id} value={type.id}>
-                      {type.icon} {type.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <div className="flex items-center justify-between rounded-xl bg-stone-50 px-3 py-2.5 text-sm dark:bg-stone-800/60">
-                <span className="text-stone-500 dark:text-stone-400">Points on completion</span>
-                <span className="font-semibold tabular-nums text-stone-900 dark:text-white">{previewPoints ?? '—'}</span>
-              </div>
-              <SubmitButton busy={saving} disabled={!title.trim() || !employee || !workType}>
-                Assign task
-              </SubmitButton>
-            </form>
-          )}
-        </Card>
-      }
-      list={
-        <Card
-          title="Assigned tasks"
-          description={`${plural(hrTasks.length, 'task')} · ${pendingCount} pending`}
-          icon={ClipboardList}
-          bodyClassName="p-0"
-        >
-          <ListToolbar>
-            <SearchInput value={search} onChange={setSearch} placeholder="Search tasks or employees" className="sm:max-w-xs sm:flex-1" />
-            <SegmentedControl
-              label="Filter by status"
-              value={statusFilter}
-              onChange={setStatusFilter}
-              options={[
-                { value: 'all', label: 'All' },
-                { value: 'pending', label: 'Pending' },
-                { value: 'completed', label: 'Completed' },
-              ]}
-            />
-          </ListToolbar>
-
-          {visibleTasks.length === 0 ? (
-            <div className="p-4 sm:p-5">
+    <div className="space-y-6">
+      <DateBar
+        value={dateFilter}
+        onChange={handleDateFilterChange}
+        countFor={(day) => hrTasks.filter((task) => task.taskDate === day).length}
+        total={hrTasks.length}
+      />
+      <SplitLayout
+        form={
+          <Card title="Assign task" description="Create a task for an employee" icon={Plus}>
+            {employees.length === 0 || workTypes.length === 0 ? (
               <EmptyState
                 icon={ClipboardList}
-                title={hrTasks.length === 0 ? 'No tasks assigned yet' : 'No matching tasks'}
-                description={hrTasks.length === 0 ? 'Assigned tasks will appear here.' : 'Try a different search or filter.'}
+                title="Set up first"
+                description="Add at least one employee and one work type before assigning tasks."
               />
-            </div>
-          ) : (
-            <ul className="divide-y divide-stone-100 dark:divide-stone-800">
-              {visibleTasks.map((task) =>
-                editingTaskId === task.id ? (
-                  <TaskEditor key={task.id} task={task} onDone={() => setEditingTaskId(null)} />
-                ) : (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    employeeName={employees.find((person) => person.id === task.employeeId)?.name ?? 'Unknown employee'}
-                    teamName={teams.find((team) => team.id === task.teamId)?.name ?? 'No team'}
-                    icon={workTypes.find((type) => type.id === task.workTypeId)?.icon}
-                    onEdit={() => setEditingTaskId(task.id)}
-                    onDelete={() =>
-                      onConfirm({
-                        title: 'Delete this task?',
-                        description: `"${task.title}" will be permanently removed. This can't be undone.`,
-                        onConfirm: async () => {
-                          await deleteTask(task.id)
-                          toast.success('Task deleted')
-                        },
-                      })
-                    }
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <Field label="Date" htmlFor="task-date">
+                  <input
+                    id="task-date"
+                    type="date"
+                    value={taskDate}
+                    onChange={(event) => setTaskDate(event.target.value)}
+                    className="field"
                   />
-                ),
-              )}
-            </ul>
-          )}
-        </Card>
-      }
-    />
+                </Field>
+                <Field label="Task title" htmlFor="task-title">
+                  <input
+                    id="task-title"
+                    value={title}
+                    onChange={(event) => setTitle(event.target.value)}
+                    placeholder="e.g. Diwali campaign poster"
+                    className="field"
+                  />
+                </Field>
+                <Field label="Employee" htmlFor="task-employee">
+                  <select id="task-employee" value={employeeId} onChange={(event) => handleEmployeeChange(event.target.value)} className="field">
+                    <option value="">Select employee</option>
+                    <EmployeeOptions employees={employees} teams={teams} />
+                  </select>
+                </Field>
+                <Field label="Work type" htmlFor="task-work-type" hint={employee ? undefined : 'Pick an employee to see the work types for their team.'}>
+                  <select id="task-work-type" value={workTypeId} onChange={(event) => setWorkTypeId(event.target.value)} className="field">
+                    <option value="">Select work type</option>
+                    {workTypeOptions.map((type) => (
+                      <option key={type.id} value={type.id}>
+                        {type.icon} {type.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="flex items-center justify-between rounded-xl bg-stone-50 px-3 py-2.5 text-sm dark:bg-stone-800/60">
+                  <span className="text-stone-500 dark:text-stone-400">Points on completion</span>
+                  <span className="font-semibold tabular-nums text-stone-900 dark:text-white">{previewPoints ?? '—'}</span>
+                </div>
+                <SubmitButton busy={saving} disabled={!title.trim() || !employee || !workType || !taskDate}>
+                  Assign task
+                </SubmitButton>
+              </form>
+            )}
+          </Card>
+        }
+        list={
+          <Card
+            title={showingAll ? 'All tasks' : `Tasks · ${relativeDayLabel(dateFilter)}`}
+            description={showingAll ? summary : `${formatDay(dateFilter)} · ${summary}`}
+            icon={ClipboardList}
+            bodyClassName="p-0"
+          >
+            <ListToolbar>
+              <SearchInput value={search} onChange={setSearch} placeholder="Search tasks or employees" className="sm:max-w-xs sm:flex-1" />
+              <SegmentedControl
+                label="Filter by status"
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={[
+                  { value: 'all', label: 'All' },
+                  { value: 'pending', label: 'Pending' },
+                  { value: 'completed', label: 'Completed' },
+                ]}
+              />
+            </ListToolbar>
+
+            {visibleTasks.length === 0 ? (
+              <div className="p-4 sm:p-5">
+                <EmptyState
+                  icon={ClipboardList}
+                  title={dayTasks.length > 0 ? 'No matching tasks' : showingAll ? 'No tasks assigned yet' : 'No tasks on this day'}
+                  description={
+                    dayTasks.length > 0
+                      ? 'Try a different search or filter.'
+                      : showingAll
+                        ? 'Assigned tasks will appear here.'
+                        : 'Assign one with the form, or pick another date.'
+                  }
+                />
+              </div>
+            ) : (
+              <ul className="divide-y divide-stone-100 dark:divide-stone-800">
+                {visibleTasks.map((task) =>
+                  editingTaskId === task.id ? (
+                    <TaskEditor key={task.id} task={task} onDone={() => setEditingTaskId(null)} />
+                  ) : (
+                    <TaskRow
+                      key={task.id}
+                      task={task}
+                      showDate={showingAll}
+                      employeeName={employees.find((person) => person.id === task.employeeId)?.name ?? 'Unknown employee'}
+                      teamName={teams.find((team) => team.id === task.teamId)?.name ?? 'No team'}
+                      icon={workTypes.find((type) => type.id === task.workTypeId)?.icon}
+                      onEdit={() => setEditingTaskId(task.id)}
+                      onDelete={() =>
+                        onConfirm({
+                          title: 'Delete this task?',
+                          description: `"${task.title}" will be permanently removed. This can't be undone.`,
+                          onConfirm: async () => {
+                            await deleteTask(task.id)
+                            toast.success('Task deleted')
+                          },
+                        })
+                      }
+                    />
+                  ),
+                )}
+              </ul>
+            )}
+          </Card>
+        }
+      />
+    </div>
   )
 }
 
 type TaskRowProps = {
   task: Task
+  showDate: boolean
   employeeName: string
   teamName: string
   icon?: string
@@ -354,7 +452,8 @@ type TaskRowProps = {
   onDelete: () => void
 }
 
-function TaskRow({ task, employeeName, teamName, icon, onEdit, onDelete }: TaskRowProps) {
+function TaskRow({ task, showDate, employeeName, teamName, icon, onEdit, onDelete }: TaskRowProps) {
+  const completedOtherDay = task.status === 'completed' && task.completedDate && task.completedDate !== task.taskDate
   return (
     <li className="flex items-start gap-3 px-4 py-3.5 sm:items-center sm:px-5">
       <span className="icon-tile h-10 w-10 text-lg">{icon ?? '✨'}</span>
@@ -362,7 +461,9 @@ function TaskRow({ task, employeeName, teamName, icon, onEdit, onDelete }: TaskR
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-stone-900 dark:text-white">{task.title || task.workTypeName}</p>
           <p className="mt-0.5 truncate text-xs text-stone-500 dark:text-stone-400">
+            {showDate ? `${formatDay(task.taskDate)} · ` : null}
             {employeeName} · {teamName} · {task.workTypeName}
+            {completedOtherDay ? ` · done ${formatDay(task.completedDate)}` : null}
           </p>
         </div>
         <div className="flex items-center gap-3 sm:shrink-0">
@@ -395,16 +496,28 @@ function TaskEditor({ task, onDone }: { task: Task; onDone: () => void }) {
   const [employeeId, setEmployeeId] = useState(task.employeeId)
   const [workTypeId, setWorkTypeId] = useState(task.workTypeId)
   const [status, setStatus] = useState<TaskStatus>(task.status)
+  const [taskDate, setTaskDate] = useState(task.taskDate)
+  // Default a new completion to the task's own day (or today for a future task) so backfilled work lands on the right day.
+  const [completedDate, setCompletedDate] = useState(() => task.completedDate ?? (task.taskDate < todayKey() ? task.taskDate : todayKey()))
   const [saving, setSaving] = useState(false)
 
   const employee = employees.find((person) => person.id === employeeId)
   const workType = workTypes.find((type) => type.id === workTypeId)
   const workTypeOptions = workTypes.filter((type) => type.id === task.workTypeId || isAllowedForTeam(type, employee?.teamId ?? ''))
-  const valid = Boolean(title.trim() && employee && workType && isAllowedForTeam(workType, employee.teamId))
+  const completed = status === 'completed'
+  const completedDateValid = !completed || Boolean(completedDate && completedDate <= todayKey())
+  const valid = Boolean(title.trim() && taskDate && completedDateValid && employee && workType && isAllowedForTeam(workType, employee.teamId))
 
   const handleSave = async (event: FormEvent) => {
     event.preventDefault()
     if (!valid || !employee || !workType) return
+
+    // Keep the original timestamp unless HR moved the completion to another day.
+    const completedAt = !completed
+      ? undefined
+      : completedDate === task.completedDate && task.completedAt
+        ? task.completedAt
+        : completionTimestamp(completedDate)
 
     setSaving(true)
     const ok = await runAction(
@@ -416,9 +529,10 @@ function TaskEditor({ task, onDone }: { task: Task; onDone: () => void }) {
           workTypeName: workType.name,
           title: title.trim(),
           points: getTaskPointsForTeam(workType, employee.teamId),
+          taskDate,
           status,
-          completedDate: status === 'completed' ? task.completedDate ?? todayKey() : undefined,
-          completedAt: status === 'completed' ? task.completedAt ?? new Date().toISOString() : undefined,
+          completedDate: completed ? completedDate : undefined,
+          completedAt,
         }),
       'Task updated',
     )
@@ -457,6 +571,23 @@ function TaskEditor({ task, onDone }: { task: Task; onDone: () => void }) {
               <option value="completed">Completed</option>
             </select>
           </Field>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Date" htmlFor={`${id}-date`}>
+            <input id={`${id}-date`} type="date" value={taskDate} onChange={(event) => setTaskDate(event.target.value)} className="field" />
+          </Field>
+          {completed ? (
+            <Field label="Completed on" htmlFor={`${id}-completed`} hint="Reports count the points on this day.">
+              <input
+                id={`${id}-completed`}
+                type="date"
+                max={todayKey()}
+                value={completedDate}
+                onChange={(event) => setCompletedDate(event.target.value)}
+                className="field"
+              />
+            </Field>
+          ) : null}
         </div>
         {employee && workType && !isAllowedForTeam(workType, employee.teamId) ? (
           <p className="text-xs font-medium text-red-600 dark:text-red-400">This work type isn't available for {employee.name}'s team.</p>

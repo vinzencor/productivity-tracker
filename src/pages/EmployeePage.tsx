@@ -29,6 +29,7 @@ export function EmployeePage() {
   const completeTask = useAppStore((state) => state.completeTask)
   const revertTask = useAppStore((state) => state.revertTask)
   const deleteTask = useAppStore((state) => state.deleteTask)
+  const adminLoggedIn = useAppStore((state) => state.adminLoggedIn)
 
   const [search, setSearch] = useState('')
   const [taskFilter, setTaskFilter] = useState<'all' | TaskStatus>('pending')
@@ -251,7 +252,7 @@ export function EmployeePage() {
                         busy={busyTaskId === task.id}
                         onComplete={(taskId) => void handleComplete(taskId)}
                         onRevert={(taskId) => void handleRevert(taskId)}
-                        onDelete={handleDelete}
+                        onDelete={adminLoggedIn ? handleDelete : undefined}
                       />
                     ))}
                   </ul>
