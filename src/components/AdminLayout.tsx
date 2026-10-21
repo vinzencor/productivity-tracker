@@ -1,5 +1,5 @@
 import { signOut } from 'firebase/auth'
-import { ChartColumn, LayoutDashboard, ListChecks, LogOut } from 'lucide-react'
+import { ChartColumn, ExternalLink, LayoutDashboard, ListChecks, LogOut, Wallet } from 'lucide-react'
 import { useEffect } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
@@ -14,6 +14,8 @@ const navItems = [
   { to: '/hr/manage', label: 'Manage', icon: ListChecks, end: false },
   { to: '/hr/reports', label: 'Reports', icon: ChartColumn, end: false },
 ]
+
+const EXPENSE_TRACKER_URL = 'https://sample-accounts.vercel.app/'
 
 function handleLogout() {
   void signOut(auth)
@@ -37,6 +39,14 @@ export function AdminLayout() {
             <p className="truncate text-sm font-bold text-stone-900 dark:text-white">Productivity Quest</p>
             <p className="text-xs font-medium text-stone-500 dark:text-stone-400">HR Portal</p>
           </div>
+        </div>
+
+        <div className="px-3 pt-3">
+          <a href={EXPENSE_TRACKER_URL} target="_blank" rel="noopener noreferrer" className="btn btn-primary w-full">
+            <Wallet size={16} />
+            Expense Tracker
+            <ExternalLink size={14} />
+          </a>
         </div>
 
         <nav className="flex-1 space-y-1 p-3" aria-label="HR navigation">
@@ -87,6 +97,17 @@ export function AdminLayout() {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <a
+              href={EXPENSE_TRACKER_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-primary btn-sm"
+              aria-label="Expense Tracker (opens in new tab)"
+              title="Expense Tracker"
+            >
+              <Wallet size={16} />
+              <span className="hidden sm:inline">Expense Tracker</span>
+            </a>
             <ThemeToggle className="btn btn-ghost btn-icon" />
             <button type="button" onClick={handleLogout} className="btn btn-ghost btn-icon" aria-label="Log out" title="Log out">
               <LogOut size={16} />
