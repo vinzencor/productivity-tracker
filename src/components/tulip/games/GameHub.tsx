@@ -5,12 +5,17 @@ import type { ComponentType } from 'react'
 import { BubblePop } from './BubblePop'
 import { CatchHearts } from './CatchHearts'
 import { MemoryMatch } from './MemoryMatch'
+import { SweetCrush } from './SweetCrush'
 import { TicTacToe } from './TicTacToe'
+import { TulipGarden } from './TulipGarden'
 import { WhackWorry } from './WhackWorry'
 
-type GameInfo = { id: string; emoji: string; title: string; blurb: string; component: ComponentType }
+/** `endless` games save her progress and are meant for long sessions, not a quick 30-second round. */
+type GameInfo = { id: string; emoji: string; title: string; blurb: string; component: ComponentType; endless?: boolean }
 
 const GAMES: GameInfo[] = [
+  { id: 'crush', emoji: '🍬', title: 'Sweet Crush', blurb: 'Match sweets through never-ending levels', component: SweetCrush, endless: true },
+  { id: 'garden', emoji: '🌱', title: 'Tulip Garden', blurb: 'Merge seeds into flowers… and something special', component: TulipGarden, endless: true },
   { id: 'bubbles', emoji: '🫧', title: 'Pop the Worries', blurb: 'Pop every worry away, one bubble at a time', component: BubblePop },
   { id: 'memory', emoji: '🧠', title: 'Cute Memory Match', blurb: 'Flip the cards and find the pairs', component: MemoryMatch },
   { id: 'catch', emoji: '🧺', title: 'Catch My Love', blurb: 'Catch the hearts, dodge the rain clouds', component: CatchHearts },
@@ -53,7 +58,7 @@ export function GameHub({ name }: { name: string }) {
             type="button"
             onClick={() => setActiveId(game.id)}
             className={`group flex items-center gap-3 rounded-2xl border border-rose-100 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-rose-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 dark:border-rose-400/20 dark:bg-stone-800 dark:hover:border-rose-400/50 ${
-              index === GAMES.length - 1 ? 'sm:col-span-2' : ''
+              GAMES.length % 2 === 1 && index === GAMES.length - 1 ? 'sm:col-span-2' : ''
             }`}
           >
             <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-rose-50 text-2xl transition-transform group-hover:scale-110 dark:bg-rose-400/10">
@@ -62,6 +67,9 @@ export function GameHub({ name }: { name: string }) {
             <span className="min-w-0">
               <span className="block font-bold text-stone-900 dark:text-white">{game.title}</span>
               <span className="block text-sm text-stone-500 dark:text-stone-400">{game.blurb}</span>
+              {game.endless ? (
+                <span className="badge mt-1 bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300">♾️ Endless · saves progress</span>
+              ) : null}
             </span>
           </button>
         ))}
