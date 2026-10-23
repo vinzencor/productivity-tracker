@@ -5,7 +5,7 @@ import { Toaster } from 'react-hot-toast'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import { AdminLayout } from './components/AdminLayout'
-import { SectionLoader } from './components/Loader'
+import { FullScreenLoader, SectionLoader } from './components/Loader'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { auth, db } from './firebase'
 import { EmployeePage } from './pages/EmployeePage'
@@ -16,6 +16,9 @@ import { useAppStore } from './store/appStore'
 const DashboardPage = lazy(() => import('./pages/hr/Dashboard').then((module) => ({ default: module.DashboardPage })))
 const ManagePage = lazy(() => import('./pages/hr/Manage').then((module) => ({ default: module.ManagePage })))
 const ReportsPage = lazy(() => import('./pages/hr/Reports').then((module) => ({ default: module.ReportsPage })))
+const NotificationSenderPage = lazy(() =>
+  import('./pages/rahul/Notification').then((module) => ({ default: module.NotificationSenderPage })),
+)
 
 function App() {
   const setAuthState = useAppStore((state) => state.setAuthState)
@@ -62,6 +65,15 @@ function App() {
       <Routes>
         <Route path="/" element={<EmployeePage />} />
         <Route path="/hr/login" element={<LoginPage />} />
+        {/* Not behind HR sign-in; the page has its own date-of-birth lock. */}
+        <Route
+          path="/rahul/notification"
+          element={
+            <Suspense fallback={<FullScreenLoader />}>
+              <NotificationSenderPage />
+            </Suspense>
+          }
+        />
         <Route
           path="/hr"
           element={

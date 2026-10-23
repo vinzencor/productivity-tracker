@@ -6,6 +6,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { auth } from '../firebase'
 import { useAppStore } from '../store/appStore'
 import { BrandMark } from './BrandMark'
+import { NotificationListener } from './notifications/NotificationListener'
 import { ThemeToggle } from './ThemeToggle'
 import { TulipButton } from './tulip/TulipButton'
 
@@ -124,6 +125,7 @@ export function AdminLayout() {
       </main>
 
       <TulipButton />
+      <NotificationListener />
 
       {/* Mobile bottom navigation */}
       <nav
