@@ -48,6 +48,17 @@ export type Task = {
   createdBy: 'employee' | 'hr'
 }
 
+/** A message sent from /rahul/notification that pops up as a modal across the HR portal. */
+export type HrNotification = {
+  id: string
+  message: string
+  /** Big emoji shown at the top of the modal. */
+  emoji: string
+  createdAt: string
+  /** When HR dismissed the modal; null until then. */
+  seenAt: string | null
+}
+
 export type DemoData = {
   teams: Team[]
   employees: Employee[]

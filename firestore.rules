@@ -98,6 +98,22 @@ service cloud.firestore {
       return changesOnly(['totalPoints']) && request.resource.data.totalPoints is number;
     }
 
+    // The note sender page (/rahul/notification) is not signed in either; it may only post a plain,
+    // unseen text note. Its date-of-birth lock lives in the app, not here.
+    function isNewNotification(noteId) {
+      let next = request.resource.data;
+      return next.keys().hasOnly(['id', 'message', 'emoji', 'createdAt', 'seenAt'])
+        && next.id == noteId
+        && next.message is string
+        && next.message.size() > 0
+        && next.message.size() <= 1000
+        && next.emoji is string
+        && next.emoji.size() > 0
+        && next.emoji.size() <= 8
+        && next.createdAt is string
+        && next.seenAt == null;
+    }
+
     match /teams/{teamId} {
       allow read: if true;
       allow create, update, delete: if isAdmin();
@@ -118,6 +134,15 @@ service cloud.firestore {
       allow read: if true;
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || isCompletion() || isReopen() || isCompletionStep() || isUndoStep();
+    }
+
+    match /notifications/{noteId} {
+      allow read: if true;
+      allow create: if isNewNotification(noteId);
+      // HR dismissing the modal is the only change to a sent note.
+      allow update: if isAdmin() && changesOnly(['seenAt']) && request.resource.data.seenAt is string;
+      // The sender page can unsend or clear its notes.
+      allow delete: if true;
     }
 
     match /admins/{uid} {

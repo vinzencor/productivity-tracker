@@ -1,10 +1,10 @@
-import confetti from 'canvas-confetti'
 import { format } from 'date-fns'
 import { Gamepad2, Heart, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { BirthdayCalendar } from './BirthdayCalendar'
 import { BreathingCircle } from './BreathingCircle'
+import { celebrate } from './celebrate'
 import { GameHub } from './games/GameHub'
 import {
   CHECK_IN_QUESTIONS,
@@ -37,17 +37,6 @@ const FLOATING_DECOR = [
 const primaryButton = 'btn bg-rose-500 text-white shadow-sm hover:bg-rose-400 focus-visible:ring-rose-400'
 const choiceButton =
   'btn h-auto min-h-11 w-full whitespace-normal border border-rose-200 bg-white py-2.5 text-stone-800 shadow-sm hover:border-rose-300 hover:bg-rose-50 focus-visible:ring-rose-400 dark:border-rose-400/30 dark:bg-stone-800 dark:text-stone-100 dark:hover:bg-stone-700'
-
-let confettiShapes: confetti.Shape[] | null = null
-
-function celebrate() {
-  try {
-    confettiShapes ??= ['🌷', '💖', '💕'].map((text) => confetti.shapeFromText({ text, scalar: 2 }))
-    confetti({ shapes: confettiShapes, scalar: 2, particleCount: 70, spread: 110, origin: { y: 0.65 }, disableForReducedMotion: true })
-  } catch {
-    // Emoji confetti needs canvas text support; the surprise works fine without it.
-  }
-}
 
 function isSecretBirthday(date: Date) {
   return date.getFullYear() === SECRET_BIRTHDAY.year && date.getMonth() === SECRET_BIRTHDAY.month && date.getDate() === SECRET_BIRTHDAY.day
